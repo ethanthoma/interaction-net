@@ -69,14 +69,51 @@ create_node :: proc(net: ^Net, type: Node_Type) -> int {
 }
 
 delete_node :: proc(net: ^Net, node: ^Node) {
-	last_node := pop(&net.nodes)
+	last_index := len(net.nodes) - 1
 
-	if node.index != len(net.nodes) {
+	if node.index != last_index {
+		last_node := net.nodes[last_index]
+		net.nodes[node.index] = last_node
 		last_node.index = node.index
-		net.nodes[node.index]^ = last_node^
+
+		update_references(net, last_index, node.index)
 	}
 
+	pop(&net.nodes)
 	free(node)
+}
+
+update_references :: proc(net: ^Net, old_index, new_index: int) {
+	for node in net.nodes {
+		switch &data in &node.data {
+		case Nullary_Node:
+			if bound, is_bound := data.ports[0].(Bound); is_bound && bound.index == old_index {
+				data.ports[0] = Bound {
+					index = new_index,
+					slot  = bound.slot,
+				}
+			}
+		case Binary_Node:
+			for i in 0 ..= 2 {
+				if bound, is_bound := data.ports[i].(Bound); is_bound && bound.index == old_index {
+					data.ports[i] = Bound {
+						index = new_index,
+						slot  = bound.slot,
+					}
+				}
+			}
+		}
+	}
+
+	// Update redexes
+	for &redex in net.redexes {
+		if redex.a.index == old_index {
+			redex.a.index = new_index
+		}
+		if redex.b.index == old_index {
+			redex.b.index = new_index
+		}
+	}
 }
 
 connect_ports :: proc(net: ^Net, port_a: Bound, port_b: Bound) {
@@ -123,6 +160,7 @@ interact :: proc(net: ^Net, redex: Pair) {
 	switch {
 	case (type_a == .CON && type_b == .DUP) || (type_a == .DUP && type_b == .CON):
 		fmt.println("γδ")
+		interact_gamma_delta(net, node_a, node_b)
 	case (type_a == .CON && type_b == .ERA) || (type_a == .ERA && type_b == .CON):
 		fmt.println("γε")
 	case (type_a == .DUP && type_b == .ERA) || (type_a == .ERA && type_b == .DUP):
@@ -140,8 +178,38 @@ interact :: proc(net: ^Net, redex: Pair) {
 }
 
 interact_gamma_delta :: proc(net: ^Net, node_a, node_b: ^Node) {
-	ports_a := node_a.data.(Binary_Node).ports
-	ports_b := node_b.data.(Binary_Node).ports
+	gamma_node := node_a.type == .CON ? node_a : node_b
+	delta_node := node_a.type == .DUP ? node_a : node_b
+
+	gamma_ports := gamma_node.data.(Binary_Node).ports
+	delta_ports := delta_node.data.(Binary_Node).ports
+
+	new_con1 := create_node(net, .CON)
+	new_con2 := create_node(net, .CON)
+
+	new_dup1 := create_node(net, .DUP)
+	new_dup2 := create_node(net, .DUP)
+
+	connect_ports(net, {new_dup1, 1}, {new_con1, 2})
+	connect_ports(net, {new_dup1, 2}, {new_con2, 2})
+	connect_ports(net, {new_dup2, 1}, {new_con1, 1})
+	connect_ports(net, {new_dup2, 2}, {new_con2, 1})
+
+	if port, ok := gamma_ports[1].(Bound); ok {
+		connect_ports(net, {new_dup2, 0}, port)
+	}
+	if port, ok := gamma_ports[2].(Bound); ok {
+		connect_ports(net, {new_dup1, 0}, port)
+	}
+	if port, ok := delta_ports[1].(Bound); ok {
+		connect_ports(net, {new_con1, 0}, port)
+	}
+	if port, ok := delta_ports[2].(Bound); ok {
+		connect_ports(net, {new_con2, 0}, port)
+	}
+
+	delete_node(net, gamma_node)
+	delete_node(net, delta_node)
 }
 
 interact_gamma_gamma :: proc(net: ^Net, node_a, node_b: ^Node) {
@@ -194,19 +262,18 @@ main :: proc() {
 	defer delete(net.nodes)
 	defer delete(net.redexes)
 
-	dup1 := create_node(&net, .DUP)
-	dup2 := create_node(&net, .DUP)
+	con := create_node(&net, .CON)
+	dup := create_node(&net, .DUP)
 
-	connect_ports(&net, {dup1, 0}, {dup2, 0})
+	connect_ports(&net, {con, 0}, {dup, 0})
 
-	era1 := create_node(&net, .ERA)
-	era2 := create_node(&net, .ERA)
-
-	connect_ports(&net, {era1, 0}, {era2, 0})
-
-	fmt.println(net)
+	for node in net.nodes {
+		fmt.println(node^)
+	}
 
 	evaluate(&net)
 
-	fmt.println(net)
+	for node in net.nodes {
+		fmt.println(node^)
+	}
 }
