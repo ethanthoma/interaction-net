@@ -163,6 +163,7 @@ interact :: proc(net: ^Net, redex: Pair) {
 		interact_gamma_delta(net, node_a, node_b)
 	case (type_a == .CON && type_b == .ERA) || (type_a == .ERA && type_b == .CON):
 		fmt.println("γε")
+		interact_gamma_epsilon(net, node_a, node_b)
 	case (type_a == .DUP && type_b == .ERA) || (type_a == .ERA && type_b == .DUP):
 		fmt.println("δε")
 	case type_a == .CON && type_b == .CON:
@@ -210,6 +211,48 @@ interact_gamma_delta :: proc(net: ^Net, node_a, node_b: ^Node) {
 
 	delete_node(net, gamma_node)
 	delete_node(net, delta_node)
+}
+
+interact_gamma_epsilon :: proc(net: ^Net, node_a, node_b: ^Node) {
+	gamma_node := node_a.type == .CON ? node_a : node_b
+	epsilon_node := node_a.type == .ERA ? node_a : node_b
+
+	gamma_ports := gamma_node.data.(Binary_Node).ports
+	epsilon_ports := epsilon_node.data.(Nullary_Node).ports
+
+	new_era1 := create_node(net, .ERA)
+	new_era2 := create_node(net, .ERA)
+
+	if port, ok := gamma_ports[1].(Bound); ok {
+		connect_ports(net, {new_era1, 0}, port)
+	}
+	if port, ok := gamma_ports[2].(Bound); ok {
+		connect_ports(net, {new_era2, 0}, port)
+	}
+
+	delete_node(net, gamma_node)
+	delete_node(net, epsilon_node)
+}
+
+interact_delta_epsilon :: proc(net: ^Net, node_a, node_b: ^Node) {
+	delta_node := node_a.type == .DUP ? node_a : node_b
+	epsilon_node := node_a.type == .ERA ? node_a : node_b
+
+	delta_ports := delta_node.data.(Binary_Node).ports
+	epsilon_ports := epsilon_node.data.(Nullary_Node).ports
+
+	new_era1 := create_node(net, .ERA)
+	new_era2 := create_node(net, .ERA)
+
+	if port, ok := delta_ports[1].(Bound); ok {
+		connect_ports(net, {new_era1, 0}, port)
+	}
+	if port, ok := delta_ports[2].(Bound); ok {
+		connect_ports(net, {new_era2, 0}, port)
+	}
+
+	delete_node(net, delta_node)
+	delete_node(net, epsilon_node)
 }
 
 interact_gamma_gamma :: proc(net: ^Net, node_a, node_b: ^Node) {
@@ -264,8 +307,9 @@ main :: proc() {
 
 	con := create_node(&net, .CON)
 	dup := create_node(&net, .DUP)
+	era := create_node(&net, .ERA)
 
-	connect_ports(&net, {con, 0}, {dup, 0})
+	connect_ports(&net, {con, 0}, {era, 0})
 
 	for node in net.nodes {
 		fmt.println(node^)
