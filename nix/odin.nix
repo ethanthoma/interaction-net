@@ -11,7 +11,8 @@
 let
   llvmPackages = llvmPackages_17;
   inherit (llvmPackages) stdenv;
-in stdenv.mkDerivation rec {
+in
+stdenv.mkDerivation rec {
   pname = "odin";
   version = "dev-2024-09";
 
@@ -19,11 +20,12 @@ in stdenv.mkDerivation rec {
     owner = "odin-lang";
     repo = "Odin";
     rev = version;
-            hash = "sha256-rbKaGj4jwR+SySt+XJ7K9rtpQsL60IKJ55/1uNkVE1U=";
+    hash = "sha256-rbKaGj4jwR+SySt+XJ7K9rtpQsL60IKJ55/1uNkVE1U=";
   };
 
   nativeBuildInputs = [
-    makeBinaryWrapper which
+    makeBinaryWrapper
+    which
   ];
 
   buildInputs = lib.optionals stdenv.isDarwin [
@@ -36,7 +38,7 @@ in stdenv.mkDerivation rec {
   postPatch = lib.optionalString stdenv.isDarwin ''
     substituteInPlace src/linker.cpp \
         --replace-fail '/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk' ${MacOSX-SDK}
-    '' + ''
+  '' + ''
     substituteInPlace build_odin.sh \
         --replace-fail '-framework System' '-lSystem'
     patchShebangs build_odin.sh
