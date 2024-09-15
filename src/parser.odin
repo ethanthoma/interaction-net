@@ -1,7 +1,6 @@
 package main
 
 import "core:fmt"
-import "core:os"
 import "core:testing"
 
 Parser :: struct {
@@ -42,12 +41,12 @@ delete_term :: proc(term: ^Term) {
 // https://github.com/odin-lang/Odin/blob/v0.13.0/core/encoding/json/parser.odin
 // odin json parser creates its own tokenizer where this one expects a list of tokens...
 // not sure which is better
-parse :: proc(p: ^Parser) -> (ok: bool = true) {
+parse :: proc(p: ^Parser) -> (definitions: map[string]Definition, ok: bool = true) {
 	for !is_at_end(p) {
 		parse_definition(p) or_return
 	}
 
-	return true
+	return p.definitions, true
 }
 
 @(private = "file")
@@ -133,6 +132,8 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 
 	#partial switch token, _ := advance_token(p); token.type {
 	case .SYMBOL:
+		term.pos = {token.line, token.column}
+
 		token = expect(p, .IDENTIFIER) or_return
 
 		term.kind = .REF
@@ -140,7 +141,10 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 		term.data = Var_Data {
 			name = token.lexeme,
 		}
+
 	case .IDENTIFIER:
+		term.pos = {token.line, token.column}
+
 		switch token.lexeme {
 		case "ERA":
 			term.kind = .ERA
@@ -188,6 +192,7 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 				right = right,
 			}
 		case:
+			term.pos = {token.line, token.column}
 			term.kind = .VAR
 			term.data = Var_Data {
 				name = token.lexeme,
@@ -215,8 +220,6 @@ error :: proc(p: ^Parser, pos: struct {
 	fmt.eprintf("Parser: (%d:%d): ", pos.line, pos.column)
 	fmt.eprintf(msg, ..args)
 	fmt.eprintf("\n")
-
-	os.exit(1)
 }
 
 // ** Testing **
@@ -229,18 +232,17 @@ test_parser :: proc(t: ^testing.T) {
     `
 
 	tokenizer := make_tokenizer(input)
-
-	tokenize(&tokenizer)
 	defer delete_tokenizer(&tokenizer)
 
-	tokens := tokenizer.tokens[:]
+	tokens, token_ok := tokenize(&tokenizer)
+	testing.expect(t, token_ok, "Tokenizing should succeed")
 
 	parser := make_parser(tokens)
 	defer delete_parser(&parser)
 
-	testing.expect(t, parse(&parser), "Parsing should succeed")
+	definitions, parse_ok := parse(&parser)
 
-	definitions := parser.definitions
+	testing.expect(t, parse_ok, "Parsing should succeed")
 
 	testing.expect(t, len(definitions) == 1, "Expected only one definition")
 

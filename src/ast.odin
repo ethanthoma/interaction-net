@@ -14,6 +14,10 @@ Term :: struct {
 		Var_Data,
 		Node_Data,
 	},
+	pos:  struct {
+		line:   int,
+		column: int,
+	},
 }
 
 Var_Data :: struct {

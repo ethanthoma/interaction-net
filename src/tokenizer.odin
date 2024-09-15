@@ -1,7 +1,6 @@
 package main
 
 import "core:fmt"
-import "core:os"
 import "core:strings"
 import "core:testing"
 
@@ -26,13 +25,13 @@ delete_tokenizer :: proc(t: ^Tokenizer) {
 	delete(t.tokens)
 }
 
-tokenize :: proc(t: ^Tokenizer) -> [dynamic]Token {
+tokenize :: proc(t: ^Tokenizer) -> (tokens: []Token, ok: bool = true) {
 	for !is_at_end(t) {
 		t.offset = t.current
-		scan(t)
+		scan(t) or_return
 	}
 
-	return t.tokens
+	return t.tokens[:], true
 }
 
 @(private = "file")
@@ -41,13 +40,13 @@ is_at_end :: proc(t: ^Tokenizer) -> bool {
 }
 
 @(private = "file")
-scan :: proc(t: ^Tokenizer) {
+scan :: proc(t: ^Tokenizer) -> (ok: bool = true) {
 	skip_whitespace(t)
 
-	c, ok := advance_rune(t)
-	if !ok {
+	c, not_eof := advance_rune(t)
+	if !not_eof {
 		add_token(t, .EOF)
-		return
+		return true
 	}
 
 	switch c {
@@ -69,7 +68,10 @@ scan :: proc(t: ^Tokenizer) {
 		scan_identifier(t)
 	case:
 		error(t, "illegal character '%r'", c)
+		return false
 	}
+
+	return true
 }
 
 @(private = "file")
@@ -142,7 +144,6 @@ error :: proc(t: ^Tokenizer, msg: string, args: ..any) {
 	fmt.eprintf("Tokenizer: (%d:%d): ", t.line, t.column)
 	fmt.eprintf(msg, ..args)
 	fmt.eprintf("\n")
-	os.exit(1)
 }
 
 // ** Testing **

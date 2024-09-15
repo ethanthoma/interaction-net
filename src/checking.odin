@@ -14,6 +14,7 @@ Check_Error :: enum {
 Context :: struct {
 	definition_names: map[string]bool,
 	variable_count:   map[string]int,
+	def_name:         string,
 }
 
 check :: proc(defs: map[string]Definition) -> (err: Check_Error) {
@@ -24,13 +25,17 @@ check :: proc(defs: map[string]Definition) -> (err: Check_Error) {
 	defer delete(ctx.definition_names)
 	defer delete(ctx.variable_count)
 
-	if "root" not_in defs do return .No_Root
+	if "root" not_in defs {
+		error("no root definition")
+		return .No_Root
+	}
 
 	for name in defs {
 		ctx.definition_names[name] = true
 	}
 
 	for _, &def in defs {
+		ctx.def_name = def.name
 		check_definition(&def, &ctx) or_return
 		clear(&ctx.variable_count)
 	}
@@ -59,12 +64,24 @@ check_term :: proc(term: ^Term, ctx: ^Context) -> (err: Check_Error) {
 		name := term.data.(Var_Data).name
 		ctx.variable_count[name] += 1
 		if ctx.variable_count[name] > 2 {
+			error(
+				"@def %s: variable %s referenced more than twice in a definition",
+				ctx.def_name,
+				name,
+			)
 			return .Non_Linear_Variable
 		}
 	case .ERA:
 	case .REF:
 		name := term.data.(Var_Data).name
 		if name not_in ctx.definition_names {
+			error(
+				"@def %s: reference %s is not defined at %d:%d",
+				ctx.def_name,
+				name,
+				term.pos.line,
+				term.pos.column,
+			)
 			return .Unbound_Reference
 		}
 	case .CON, .DUP:
@@ -80,12 +97,19 @@ check_term :: proc(term: ^Term, ctx: ^Context) -> (err: Check_Error) {
 check_linearity :: proc(def: ^Definition, ctx: ^Context) -> (err: Check_Error) {
 	for var, count in ctx.variable_count {
 		if count != 2 {
-			fmt.printfln("Var %v had %d occurances", var, count)
+			error("@def %s: variable %s has %d references, expected 2", def.name, var, count)
 			return .Non_Linear_Variable
 		}
 	}
 
 	return .None
+}
+
+@(private = "file")
+error :: proc(msg: string, args: ..any) {
+	fmt.eprintf("Check: ")
+	fmt.eprintf(msg, ..args)
+	fmt.eprintf("\n")
 }
 
 // ** Testing **
@@ -100,12 +124,15 @@ test_check_succeed :: proc(t: ^testing.T) {
 	tokenizer := make_tokenizer(input)
 	defer delete_tokenizer(&tokenizer)
 
-	tokenize(&tokenizer)
+	tokens, token_ok := tokenize(&tokenizer)
+	testing.expect(t, token_ok, "Tokenizing should succeed")
 
-	parser := make_parser(tokenizer.tokens[:])
+	parser := make_parser(tokens)
 	defer delete_parser(&parser)
 
-	testing.expect(t, parse(&parser), "Parser should succeed")
+	definitions, parse_ok := parse(&parser)
+
+	testing.expect(t, parse_ok, "Parsing should succeed")
 
 	err := check(parser.definitions)
 
@@ -121,12 +148,15 @@ test_check_non_linear_variable_one :: proc(t: ^testing.T) {
 	tokenizer := make_tokenizer(input)
 	defer delete_tokenizer(&tokenizer)
 
-	tokenize(&tokenizer)
+	tokens, token_ok := tokenize(&tokenizer)
+	testing.expect(t, token_ok, "Tokenizing should succeed")
 
-	parser := make_parser(tokenizer.tokens[:])
+	parser := make_parser(tokens)
 	defer delete_parser(&parser)
 
-	testing.expect(t, parse(&parser), "Parser should succeed")
+	definitions, parse_ok := parse(&parser)
+
+	testing.expect(t, parse_ok, "Parsing should succeed")
 
 	err := check(parser.definitions)
 
@@ -143,18 +173,21 @@ test_check_non_linear_variable_one :: proc(t: ^testing.T) {
 @(test)
 test_check_non_linear_variable_three :: proc(t: ^testing.T) {
 	input := `
-        @root := a & CON(b, c) ~ DUP(b, a)
+        @root = a & CON(b, c) ~ DUP(b, a)
     `
 
 	tokenizer := make_tokenizer(input)
 	defer delete_tokenizer(&tokenizer)
 
-	tokenize(&tokenizer)
+	tokens, token_ok := tokenize(&tokenizer)
+	testing.expect(t, token_ok, "Tokenizing should succeed")
 
-	parser := make_parser(tokenizer.tokens[:])
+	parser := make_parser(tokens)
 	defer delete_parser(&parser)
 
-	testing.expect(t, parse(&parser), "Parser should succeed")
+	definitions, parse_ok := parse(&parser)
+
+	testing.expect(t, parse_ok, "Parsing should succeed")
 
 	err := check(parser.definitions)
 
@@ -170,18 +203,21 @@ test_check_non_linear_variable_three :: proc(t: ^testing.T) {
 @(test)
 test_check_Unbound_Reference :: proc(t: ^testing.T) {
 	input := `
-        @root := a & @first ~ CON(ERA(), a)
+        @root = a & @first ~ CON(ERA(), a)
     `
 
 	tokenizer := make_tokenizer(input)
 	defer delete_tokenizer(&tokenizer)
 
-	tokenize(&tokenizer)
+	tokens, token_ok := tokenize(&tokenizer)
+	testing.expect(t, token_ok, "Tokenizing should succeed")
 
-	parser := make_parser(tokenizer.tokens[:])
+	parser := make_parser(tokens)
 	defer delete_parser(&parser)
 
-	testing.expect(t, parse(&parser), "Parser should succeed")
+	definitions, parse_ok := parse(&parser)
+
+	testing.expect(t, parse_ok, "Parsing should succeed")
 
 	err := check(parser.definitions)
 
