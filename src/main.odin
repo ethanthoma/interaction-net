@@ -5,7 +5,11 @@ import "core:fmt"
 main :: proc() {
 	input := `
         @root = a 
-            & CON(ERA(), DUP(c, CON(b, DUP(c, b)))) ~ CON(a, DUP(c, CON(b, DUP(c, b))))
+            & @second ~ CON(a, @first)
+
+        @first = DUP(a, CON(b, DUP(a, b)))
+
+        @second = CON(ERA(), @first)
     `
 
 	// Create tokenizer
@@ -18,11 +22,8 @@ main :: proc() {
 	parser := make_parser(tokenizer.tokens[:])
 	defer delete_parser(&parser)
 
-	parse(&parser)
+	assert(parse(&parser))
 
-	// Extract root def
-	root, ok := parser.definitions["root"]
-	if !ok do return
-
-	fmt.println(root)
+	// Semantic analysis
+	assert(check(parser.definitions) == .None)
 }

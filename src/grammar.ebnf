@@ -1,0 +1,25 @@
+lower case alpha = "a" | ... | "z"
+upper case alpha = "A" | ... | "Z" 
+alpha = lower case alpha | upper case alpha
+numeric = "0" | ... | "9"
+
+(* Lexical elements *)
+variable = alpha, { alpha | numeric }
+identifier = alpha, { alpha }
+
+(* Terms *)
+term = era_term | con_term | dup_term | var_term | ref_term
+era_term = "ERA", "(", ")"
+con_term = "CON", "(", term, ",", term, ")"
+dup_term = "DUP", "(", term, ",", term, ")"
+var_term = variable
+ref_term = "@", identifier
+
+(* Redex *)
+redex = term, "~", term
+
+(* Definition *)
+definition = "@", identifier, "=", term, { "&", redex }
+
+(* Program *)
+program = definition, { definition }

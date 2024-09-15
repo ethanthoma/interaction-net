@@ -3,42 +3,6 @@ package main
 import "core:fmt"
 import "core:testing"
 
-Term_Kind :: enum {
-	VAR,
-	ERA,
-	REF,
-	CON,
-	DUP,
-}
-
-Term :: struct {
-	kind: Term_Kind,
-	data: union {
-		Var_Data,
-		Node_Data,
-	},
-}
-
-Var_Data :: struct {
-	name: string,
-}
-
-Node_Data :: struct {
-	left:  ^Term,
-	right: ^Term,
-}
-
-Redex :: struct {
-	left:  ^Term,
-	right: ^Term,
-}
-
-Definition :: struct {
-	name:    string,
-	root:    ^Term,
-	redexes: [dynamic]Redex,
-}
-
 Parser :: struct {
 	tokens:      []Token,
 	current:     int,
@@ -50,17 +14,38 @@ make_parser :: proc(tokens: []Token) -> Parser {
 }
 
 delete_parser :: proc(p: ^Parser) {
+	for _, &def in p.definitions {
+		delete_term(def.root)
+
+		for &redex in def.redexes {
+			delete_term(redex.left)
+			delete_term(redex.right)
+		}
+
+		delete(def.redexes)
+	}
+
 	delete(p.definitions)
+}
+
+delete_term :: proc(term: ^Term) {
+	if node_data, match := term.data.(Node_Data); match {
+		delete_term(node_data.left)
+		delete_term(node_data.right)
+	}
+
+	free(term)
 }
 
 // parse abuses or_return but doesn't track errors well (ie, fails cause no tilde, no info why/where)
 // https://github.com/odin-lang/Odin/blob/v0.13.0/core/encoding/json/parser.odin
 // odin json parser creates its own tokenizer where this one expects a list of tokens...
 // not sure which is better
-parse :: proc(p: ^Parser) -> (ok: bool) {
+parse :: proc(p: ^Parser) -> (ok: bool = true) {
 	for !is_at_end(p) {
 		parse_definition(p) or_return
 	}
+
 	return true
 }
 
@@ -70,7 +55,7 @@ is_at_end :: proc(p: ^Parser) -> bool {
 }
 
 @(private = "file")
-parse_definition :: proc(p: ^Parser) -> (ok: bool) {
+parse_definition :: proc(p: ^Parser) -> (ok: bool = true) {
 	expect(p, .SYMBOL) or_return
 
 	token := expect(p, .IDENTIFIER) or_return
@@ -78,20 +63,26 @@ parse_definition :: proc(p: ^Parser) -> (ok: bool) {
 	expect(p, .EQUALS) or_return
 
 	name := token.lexeme
+	if name in p.definitions do return false
+
 	root := parse_term(p) or_return
+	defer if !ok do delete_term(root)
 
 	def := Definition {
 		name    = name,
 		root    = root,
 		redexes = make([dynamic]Redex),
 	}
+	defer if !ok do delete(def.redexes)
 
 	for _, match := expect(p, .AMPERSAND); match; _, match = expect(p, .AMPERSAND) {
 		left := parse_term(p) or_return
+		defer if !ok do delete_term(left)
 
 		expect(p, .TILDE) or_return
 
 		right := parse_term(p) or_return
+		defer if !ok do delete_term(right)
 
 		append(&def.redexes, Redex{left = left, right = right})
 	}
@@ -101,7 +92,7 @@ parse_definition :: proc(p: ^Parser) -> (ok: bool) {
 }
 
 @(private = "file")
-expect :: proc(p: ^Parser, type: Token_Type) -> (token: Token, ok: bool) {
+expect :: proc(p: ^Parser, type: Token_Type) -> (token: Token, ok: bool = true) {
 	if is_at_end(p) {
 		return token, false
 	}
@@ -115,25 +106,27 @@ expect :: proc(p: ^Parser, type: Token_Type) -> (token: Token, ok: bool) {
 }
 
 @(private = "file")
-parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool) {
+parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 	if is_at_end(p) {
 		return term, false
 	}
 
 	term = new(Term)
-	defer {if !ok do free(term)}
+	defer if !ok do free(term)
 
-	if token, match := expect(p, .SYMBOL); match {
+	if _, match := expect(p, .SYMBOL); match {
+		token := expect(p, .IDENTIFIER) or_return
+
 		term.kind = .REF
-		left := parse_term(p) or_return
-		term.data = Node_Data {
-			left  = left,
-			right = nil,
+
+		term.data = Var_Data {
+			name = token.lexeme,
 		}
 	} else if token, match := expect(p, .IDENTIFIER); match {
 		switch token.lexeme {
 		case "ERA":
 			term.kind = .ERA
+
 			expect(p, .LEFT_PAREN) or_return
 			expect(p, .RIGHT_PAREN) or_return
 		// TODO: both DUP and CON are binary so they do the same checks, should
@@ -142,9 +135,15 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool) {
 			term.kind = .DUP
 
 			expect(p, .LEFT_PAREN) or_return
+
 			left := parse_term(p) or_return
+			defer if !ok do delete_term(left)
+
 			expect(p, .COMMA) or_return
+
 			right := parse_term(p) or_return
+			defer if !ok do delete_term(right)
+
 			expect(p, .RIGHT_PAREN) or_return
 
 			term.data = Node_Data {
@@ -155,9 +154,15 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool) {
 			term.kind = .CON
 
 			expect(p, .LEFT_PAREN) or_return
+
 			left := parse_term(p) or_return
+			defer if !ok do delete_term(left)
+
 			expect(p, .COMMA) or_return
+
 			right := parse_term(p) or_return
+			defer if !ok do delete_term(right)
+
 			expect(p, .RIGHT_PAREN) or_return
 
 			term.data = Node_Data {
@@ -183,7 +188,7 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool) {
 
 // TODO: can be removed, its used for one error and that's it
 @(private = "file")
-advance_token :: proc(p: ^Parser) -> (token: Token, ok: bool) {
+advance_token :: proc(p: ^Parser) -> (token: Token, ok: bool = true) {
 	if is_at_end(p) {
 		return token, false
 	}
@@ -211,6 +216,7 @@ test_parser :: proc(t: ^testing.T) {
 	tokens := tokenizer.tokens[:]
 
 	parser := make_parser(tokens)
+	defer delete_parser(&parser)
 
 	testing.expect(t, parse(&parser), "Parsing should succeed")
 
