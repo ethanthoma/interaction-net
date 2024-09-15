@@ -1,0 +1,6 @@
+@root = a 
+    & @second ~ CON(a, @first)
+
+@first = DUP(a, CON(b, DUP(a, b)))
+
+@second = CON(ERA(), @first)

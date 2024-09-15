@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import "core:os"
 import "core:testing"
 
 Parser :: struct {
@@ -75,7 +76,9 @@ parse_definition :: proc(p: ^Parser) -> (ok: bool = true) {
 	}
 	defer if !ok do delete(def.redexes)
 
-	for _, match := expect(p, .AMPERSAND); match; _, match = expect(p, .AMPERSAND) {
+	for token, _ = peek(p); token.type == .AMPERSAND; token, _ = peek(p) {
+		p.current += 1
+
 		left := parse_term(p) or_return
 		defer if !ok do delete_term(left)
 
@@ -93,16 +96,30 @@ parse_definition :: proc(p: ^Parser) -> (ok: bool = true) {
 
 @(private = "file")
 expect :: proc(p: ^Parser, type: Token_Type) -> (token: Token, ok: bool = true) {
-	if is_at_end(p) {
-		return token, false
-	}
-
-	if token = p.tokens[p.current]; token.type == type {
+	if token = peek(p) or_return; token.type == type {
 		p.current += 1
 		return token, true
 	}
 
+	error(p, {token.line, token.column}, "expected token %v, got %v", type, token.type)
 	return token, false
+}
+
+@(private = "file")
+advance_token :: proc(p: ^Parser) -> (token: Token, ok: bool = true) {
+	token = peek(p) or_return
+	p.current += 1
+
+	return token, true
+}
+
+@(private = "file")
+peek :: proc(p: ^Parser) -> (token: Token, ok: bool = true) {
+	if is_at_end(p) {
+		return token, false
+	}
+
+	return p.tokens[p.current], true
 }
 
 @(private = "file")
@@ -114,15 +131,16 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 	term = new(Term)
 	defer if !ok do free(term)
 
-	if _, match := expect(p, .SYMBOL); match {
-		token := expect(p, .IDENTIFIER) or_return
+	#partial switch token, _ := advance_token(p); token.type {
+	case .SYMBOL:
+		token = expect(p, .IDENTIFIER) or_return
 
 		term.kind = .REF
 
 		term.data = Var_Data {
 			name = token.lexeme,
 		}
-	} else if token, match := expect(p, .IDENTIFIER); match {
+	case .IDENTIFIER:
 		switch token.lexeme {
 		case "ERA":
 			term.kind = .ERA
@@ -175,28 +193,30 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 				name = token.lexeme,
 			}
 		}
-	} else {
-		token, _ := advance_token(p)
-		// TODO: odin tokenizer has an intersting way of tracking errors, should 
-		// look into that
-		fmt.printfln("Error: expected symbol or identifer, found %v", token.type)
-		return term, false
+
+	case:
+		error(
+			p,
+			{token.line, token.column},
+			"expected token to %v or %v, got %v",
+			Token_Type.IDENTIFIER,
+			Token_Type.SYMBOL,
+			token.type,
+		)
 	}
 
 	return term, true
 }
 
-// TODO: can be removed, its used for one error and that's it
 @(private = "file")
-advance_token :: proc(p: ^Parser) -> (token: Token, ok: bool = true) {
-	if is_at_end(p) {
-		return token, false
-	}
+error :: proc(p: ^Parser, pos: struct {
+		line, column: int,
+	}, msg: string, args: ..any) {
+	fmt.eprintf("Parser: (%d:%d): ", pos.line, pos.column)
+	fmt.eprintf(msg, ..args)
+	fmt.eprintf("\n")
 
-	token = p.tokens[p.current]
-	p.current += 1
-
-	return token, true
+	os.exit(1)
 }
 
 // ** Testing **

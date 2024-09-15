@@ -1,13 +1,14 @@
 package main
 
 import "core:fmt"
+import "core:os"
 import "core:strings"
 import "core:testing"
 
 Tokenizer :: struct {
-	input:                 string,
-	offset, current, line: int,
-	tokens:                [dynamic]Token,
+	input:                         string,
+	offset, current, line, column: int,
+	tokens:                        [dynamic]Token,
 }
 
 make_tokenizer :: proc(input: string) -> Tokenizer {
@@ -16,6 +17,7 @@ make_tokenizer :: proc(input: string) -> Tokenizer {
 		offset = 0,
 		current = 0,
 		line = 1,
+		column = 1,
 		tokens = make([dynamic]Token),
 	}
 }
@@ -66,7 +68,7 @@ scan :: proc(t: ^Tokenizer) {
 	case 'A' ..= 'Z', 'a' ..= 'z':
 		scan_identifier(t)
 	case:
-		fmt.printf("Unexpected character: %c at line %d\n", c, t.line)
+		error(t, "illegal character '%r'", c)
 	}
 }
 
@@ -79,10 +81,12 @@ skip_whitespace :: proc(t: ^Tokenizer) {
 		switch c {
 		case '\n':
 			t.line += 1
+			t.column = 1
 			t.current += 1
 			t.offset += 1
 		case ' ', '\t', '\r', '\v', '\f':
 			t.current += 1
+			t.column += 1
 			t.offset += 1
 		case:
 			return
@@ -93,7 +97,7 @@ skip_whitespace :: proc(t: ^Tokenizer) {
 @(private = "file")
 peek :: proc(t: ^Tokenizer) -> (c: rune, ok: bool) {
 	if is_at_end(t) {
-		return {}, false
+		return c, false
 	}
 
 	return rune(t.input[t.current]), true
@@ -113,7 +117,9 @@ add_token :: proc(t: ^Tokenizer, type: Token_Type) {
 		type   = type,
 		lexeme = text,
 		line   = t.line,
+		column = t.column,
 	}
+	t.column += len(text)
 	t.offset = t.current
 	append(&t.tokens, token)
 }
@@ -129,6 +135,14 @@ scan_identifier :: proc(t: ^Tokenizer) {
 @(private = "file")
 is_alphanumeric :: proc(c: rune) -> bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || (c >= '0' && c <= '9')
+}
+
+@(private = "file")
+error :: proc(t: ^Tokenizer, msg: string, args: ..any) {
+	fmt.eprintf("Tokenizer: (%d:%d): ", t.line, t.column)
+	fmt.eprintf(msg, ..args)
+	fmt.eprintf("\n")
+	os.exit(1)
 }
 
 // ** Testing **

@@ -16,4 +16,5 @@ Token :: struct {
 	type:   Token_Type,
 	lexeme: string,
 	line:   int,
+	column: int,
 }

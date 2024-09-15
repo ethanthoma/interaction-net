@@ -1,19 +1,15 @@
 package main
 
 import "core:fmt"
+import "core:os"
 
 main :: proc() {
-	input := `
-        @root = a 
-            & @second ~ CON(a, @first)
-
-        @first = DUP(a, CON(b, DUP(a, b)))
-
-        @second = CON(ERA(), @first)
-    `
+	data, ok := os.read_entire_file("./test.inet")
+	assert(ok)
+	defer delete(data)
 
 	// Create tokenizer
-	tokenizer := make_tokenizer(input)
+	tokenizer := make_tokenizer(string(data))
 	defer delete_tokenizer(&tokenizer)
 
 	tokenize(&tokenizer)
