@@ -1,5 +1,5 @@
 {
-  description = "A very basic flake";
+  description = "Interaction Nets in Odin";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
@@ -18,44 +18,9 @@
           };
         in
         {
-          packages.default = pkgs.stdenv.mkDerivation rec {
-            pname = "myapp";
-            version = "0.1";
-            src = ./src;
+          packages.default = pkgs.callPackage ./nix { inherit odin; };
 
-            nativeBuildInputs = [ odin ];
-
-            buildPhase = ''
-              odin build $src -out:${pname}
-              mkdir -p $out/bin
-              mv ${pname} $out/bin/
-            '';
-          };
-
-          checks.default = pkgs.runCommandLocal "odin-test"
-            {
-              src = ./src;
-              nativeBuildInputs = [ odin ];
-            } ''
-            odin test $src & touch $out
-          '';
-
-          devShells.default =
-            let
-              ols = pkgs.ols.overrideAttrs (finalAttrs: previousAttrs: {
-                buildInputs = [ odin ];
-                env.ODIN_ROOT = "${odin}/share";
-              });
-            in
-            pkgs.mkShell
-              {
-                packages = [
-                  odin
-                  ols
-                ];
-
-                env.ODIN_ROOT = "${odin}/share";
-              };
+          devShells.default = pkgs.callPackage ./nix/shell.nix { inherit odin; };
         }
       )
     );
