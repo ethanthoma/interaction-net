@@ -8,7 +8,7 @@ make_compiler :: proc(input: string) -> Compiler {
 	return {input = input}
 }
 
-compile :: proc(c: ^Compiler) -> (ok: bool = true) {
+compile :: proc(c: ^Compiler) -> (program: Program, ok: bool = true) {
 	tokenizer := make_tokenizer(c.input)
 	defer delete_tokenizer(&tokenizer)
 
@@ -21,5 +21,9 @@ compile :: proc(c: ^Compiler) -> (ok: bool = true) {
 
 	(check(definitions) == .None) or_return
 
-	return true
+	program = make_program()
+
+	generate(&program, definitions)
+
+	return program, true
 }
