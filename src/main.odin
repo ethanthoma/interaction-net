@@ -27,5 +27,9 @@ main :: proc() {
 	}
 	defer delete_program(&program)
 
+	fmt.println(program)
+
 	run(&program)
+
+	fmt.println(program)
 }

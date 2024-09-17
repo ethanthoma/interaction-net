@@ -1,0 +1,2 @@
+@root = a 
+    & CON(ERA(), a) ~ ERA()

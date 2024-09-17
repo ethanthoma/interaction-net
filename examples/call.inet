@@ -1,0 +1,5 @@
+@root = a
+    & @first ~ CON(a, ERA())
+
+@first = a
+    & DUP(b, ERA()) ~ CON(a, b)

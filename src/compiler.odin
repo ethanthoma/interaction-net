@@ -1,5 +1,7 @@
 package main
 
+import "core:fmt"
+
 Compiler :: struct {
 	input: string,
 }

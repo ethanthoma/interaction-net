@@ -4,15 +4,13 @@ Port :: struct {
 	tag:  Term_Kind,
 	data: union {
 		Node_Address, // CON DUP
-		Ref_Address, // REF
-		Var_Name, // VAR
+		Var_Address, // VAR
 		Empty, // ERA
 	},
 }
 
 Node_Address :: distinct u32
-Ref_Address :: distinct u32
-Var_Name :: distinct string
+Var_Address :: distinct u32
 Empty :: struct {}
 
 Pair :: struct {

@@ -63,7 +63,10 @@ parse_definition :: proc(p: ^Parser) -> (ok: bool = true) {
 	expect(p, .EQUALS) or_return
 
 	name := token.lexeme
-	if name in p.definitions do return false
+	if name in p.definitions {
+		error(p, {token.line, token.column}, "@%s is already defined", name)
+		return false
+	}
 
 	root := parse_term(p) or_return
 	defer if !ok do delete_term(root)
@@ -95,12 +98,15 @@ parse_definition :: proc(p: ^Parser) -> (ok: bool = true) {
 
 @(private = "file")
 expect :: proc(p: ^Parser, type: Token_Type) -> (token: Token, ok: bool = true) {
-	if token = peek(p) or_return; token.type == type {
+	defer if !ok {
+		error(p, {token.line, token.column}, "expected token %v, got %v", type, token.type)
+	}
+
+	if token, ok = peek(p); token.type == type {
 		p.current += 1
 		return token, true
 	}
 
-	error(p, {token.line, token.column}, "expected token %v, got %v", type, token.type)
 	return token, false
 }
 
@@ -115,7 +121,7 @@ advance_token :: proc(p: ^Parser) -> (token: Token, ok: bool = true) {
 @(private = "file")
 peek :: proc(p: ^Parser) -> (token: Token, ok: bool = true) {
 	if is_at_end(p) {
-		return token, false
+		return p.tokens[p.current], false
 	}
 
 	return p.tokens[p.current], true
@@ -124,6 +130,8 @@ peek :: proc(p: ^Parser) -> (token: Token, ok: bool = true) {
 @(private = "file")
 parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 	if is_at_end(p) {
+		token := p.tokens[p.current]
+		error(p, {token.line, token.column}, "unexpected EOF")
 		return term, false
 	}
 
