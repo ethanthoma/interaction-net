@@ -24,6 +24,7 @@ check :: proc(defs: map[string]Definition) -> (err: Check_Error) {
 	}
 	defer delete(ctx.definition_names)
 	defer delete(ctx.variable_count)
+	context.user_ptr = &ctx
 
 	if "root" not_in defs {
 		error("no root definition")
@@ -36,7 +37,7 @@ check :: proc(defs: map[string]Definition) -> (err: Check_Error) {
 
 	for _, &def in defs {
 		ctx.def_name = def.name
-		check_definition(&def, &ctx) or_return
+		check_definition(&def) or_return
 		clear(&ctx.variable_count)
 	}
 
@@ -44,21 +45,22 @@ check :: proc(defs: map[string]Definition) -> (err: Check_Error) {
 }
 
 @(private = "file")
-check_definition :: proc(def: ^Definition, ctx: ^Context) -> (err: Check_Error) {
-	check_term(def.root, ctx) or_return
+check_definition :: proc(def: ^Definition) -> (err: Check_Error) {
+	check_term(def.root) or_return
 
 	for redex in def.redexes {
-		check_term(redex.left, ctx) or_return
-		check_term(redex.right, ctx) or_return
+		check_term(redex.left) or_return
+		check_term(redex.right) or_return
 	}
 
-	check_linearity(def, ctx) or_return
+	check_linearity(def) or_return
 
 	return .None
 }
 
 @(private = "file")
-check_term :: proc(term: ^Term, ctx: ^Context) -> (err: Check_Error) {
+check_term :: proc(term: ^Term) -> (err: Check_Error) {
+	ctx := cast(^Context)context.user_ptr
 	switch term.kind {
 	case .VAR:
 		name := term.data.(Var_Data).name
@@ -86,15 +88,16 @@ check_term :: proc(term: ^Term, ctx: ^Context) -> (err: Check_Error) {
 		}
 	case .CON, .DUP:
 		node_data := term.data.(Node_Data)
-		check_term(node_data.left, ctx) or_return
-		check_term(node_data.right, ctx) or_return
+		check_term(node_data.left) or_return
+		check_term(node_data.right) or_return
 	}
 
 	return .None
 }
 
 @(private = "file")
-check_linearity :: proc(def: ^Definition, ctx: ^Context) -> (err: Check_Error) {
+check_linearity :: proc(def: ^Definition) -> (err: Check_Error) {
+	ctx := cast(^Context)context.user_ptr
 	for var, count in ctx.variable_count {
 		if count != 2 {
 			error("@def %s: variable %s has %d references, expected 2", def.name, var, count)

@@ -19,7 +19,6 @@ Context :: struct {
 	definitions: map[string]Definition,
 	parsed_refs: map[string]bool,
 	vars:        map[string]Var_Address,
-	current:     string,
 }
 
 make_book :: proc() -> Book {
