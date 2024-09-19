@@ -1,2 +1,2 @@
 @root = a
-    & CON(b, ERA()) ~ DUP(a, b)
+    & CON(CON(b, b), a) ~ CON(DUP(c, CON(c, d)), d)

@@ -1,7 +1,5 @@
 package main
 
-import "core:fmt"
-
 Compiler :: struct {
 	input: string,
 }
@@ -10,7 +8,7 @@ make_compiler :: proc(input: string) -> Compiler {
 	return {input = input}
 }
 
-compile :: proc(c: ^Compiler) -> (program: Program, ok: bool = true) {
+compile :: proc(c: ^Compiler) -> (book: Book, ok: bool = true) {
 	tokenizer := make_tokenizer(c.input)
 	defer delete_tokenizer(&tokenizer)
 
@@ -23,9 +21,9 @@ compile :: proc(c: ^Compiler) -> (program: Program, ok: bool = true) {
 
 	(check(definitions) == .None) or_return
 
-	program = make_program()
+	book = make_book()
 
-	generate(&program, definitions)
+	generate(&book, definitions)
 
-	return program, true
+	return book, true
 }

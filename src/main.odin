@@ -20,16 +20,14 @@ main :: proc() {
 	defer delete(data)
 
 	compiler := make_compiler(string(data))
-	program, compile_ok := compile(&compiler)
+	book, compile_ok := compile(&compiler)
 	if !compile_ok {
 		fmt.eprintfln("Failed to compiled %s", filename)
 		os.exit(1)
 	}
-	defer delete_program(&program)
+	defer delete_book(&book)
 
-	fmt.println(program)
+	fmt.printfln("%v", book)
 
-	run(&program)
-
-	fmt.println(program)
+	run(&book)
 }

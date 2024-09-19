@@ -3,34 +3,62 @@ package main
 import "core:container/queue"
 import "core:fmt"
 
-@(private = "file")
-Context :: struct {
-	substitutions: map[Var_Address]Port,
+ROOT :: Ref_Address(0)
+NONE :: Var_Address(1 << 32 - 1)
+
+Program :: struct {
+	nodes:   [dynamic]Maybe_Pair,
+	redexes: queue.Queue(Pair),
+	vars:    [dynamic]Maybe_Port,
 }
 
-run :: proc(program: ^Program) {
-	ctx := Context {
-		substitutions = make(map[Var_Address]Port),
-	}
-	defer delete(ctx.substitutions)
+Maybe_Port :: union {
+	Empty,
+	Port,
+}
 
-	boot: Pair = {{.REF, Var_Address(len(program.vars))}, {.REF, Var_Address(0)}}
-	queue.push_front(&program.redexes, boot)
+Maybe_Pair :: union {
+	Empty,
+	Pair,
+}
+
+@(private = "file")
+Context :: struct {
+	book: ^Book,
+}
+
+run :: proc(book: ^Book) {
+	ctx := Context{book}
+	context.user_ptr = &ctx
+
+	program: Program = {
+		nodes = make([dynamic]Maybe_Pair),
+		vars  = make([dynamic]Maybe_Port),
+	}
+	queue.init(&program.redexes)
+
+	defer delete(program.nodes)
+	defer queue.destroy(&program.redexes)
+	defer delete(program.vars)
+
+	assign_at(&program.vars, 0, Empty{})
+	queue.push_front(&program.redexes, Pair{{.REF, ROOT}, {.VAR, Var_Address(0)}})
+
+	fmt.println(program)
 
 	for {
 		redex := queue.pop_front_safe(&program.redexes) or_break
-		interact(program, redex, &ctx)
+		interact(&program, redex)
 	}
-
-	for &var in program.vars {
-		var = enter(program, var, &ctx)
-	}
-
-	fmt.println(ctx.substitutions)
 }
 
-interact :: proc(program: ^Program, redex: Pair, ctx: ^Context) {
+@(private = "file")
+interact :: proc(program: ^Program, redex: Pair) {
 	a, b := redex.left, redex.right
+
+	if a.tag == .REF && b == {.VAR, Var_Address(0)} do call(program, redex)
+
+	if a.tag < b.tag do a, b = b, a
 
 	tags := struct {
 		tag_a: Term_Kind,
@@ -39,28 +67,28 @@ interact :: proc(program: ^Program, redex: Pair, ctx: ^Context) {
 
 	switch tags {
 	case {.CON, .DUP}, {.DUP, .CON}:
-		commute(program, redex, ctx)
+		commute(program, redex)
 	case {.CON, .ERA}, {.ERA, .CON}:
-		erase(program, redex, ctx)
+		erase(program, redex)
 	case {.DUP, .ERA}, {.ERA, .DUP}:
-		erase(program, redex, ctx)
+		erase(program, redex)
 	case {.CON, .CON}:
-		annihilate(program, redex, ctx)
+		annihilate(program, redex)
 	case {.DUP, .DUP}:
-		annihilate(program, redex, ctx)
+		annihilate(program, redex)
 	case {.ERA, .ERA}:
-		void(program, redex, ctx)
+		void(program, redex)
 	case {.REF, .REF}:
-		void(program, redex, ctx)
+		void(program, redex)
 	case {.REF, .ERA}, {.ERA, .REF}:
-		void(program, redex, ctx)
+		void(program, redex)
 	case {.REF, .CON}, {.CON, .REF}:
-		call(program, redex, ctx)
+		call(program, redex)
 	case {.REF, .DUP}, {.DUP, .REF}:
-		erase(program, redex, ctx)
+		erase(program, redex)
 	case:
 		if a.tag == .VAR || b.tag == .VAR {
-			link(program, redex, ctx)
+			link(program, redex)
 		} else {
 			fmt.eprintfln("Missing rule for %v:%v", a.tag, b.tag)
 		}
@@ -68,8 +96,8 @@ interact :: proc(program: ^Program, redex: Pair, ctx: ^Context) {
 }
 
 @(private = "file")
-commute :: proc(program: ^Program, redex: Pair, ctx: ^Context) {
-	fmt.println("interact: γδ")
+commute :: proc(program: ^Program, redex: Pair) {
+	fmt.println("interact: COMM")
 
 	con, dup := redex.left, redex.right
 	if con.tag == .DUP {
@@ -87,44 +115,32 @@ commute :: proc(program: ^Program, redex: Pair, ctx: ^Context) {
 	y1 := create_var(program)
 	y2 := create_var(program)
 
-	new_con1 := create_node(program, .CON, x1, x2)
-	new_con2 := create_node(program, .CON, y1, y2)
+	new_con1 := create_node(program, .CON, x2, x1)
+	new_con2 := create_node(program, .CON, y2, y1)
 
-	new_dup1 := create_node(program, .DUP, x1, y1)
-	new_dup2 := create_node(program, .DUP, x2, y2)
+	new_dup1 := create_node(program, .DUP, y2, x2)
+	new_dup2 := create_node(program, .DUP, y1, x1)
 
-	link(program, Pair{new_con1, con_node.left}, ctx)
-	link(program, Pair{new_con2, con_node.right}, ctx)
-	link(program, Pair{new_dup1, dup_node.left}, ctx)
-	link(program, Pair{new_dup2, dup_node.right}, ctx)
+	link(program, Pair{new_dup1, con_node.right})
+	link(program, Pair{new_dup2, con_node.left})
+	link(program, Pair{new_con1, dup_node.right})
+	link(program, Pair{new_con2, dup_node.left})
 
 	delete_node(program, con_addr)
 	delete_node(program, dup_addr)
 }
 
 @(private = "file")
-create_var :: proc(program: ^Program) -> Port {
-	@(static)
-	addr := -1
-
-	if addr == -1 {
-		addr = len(program.vars)
-
-		var := Port {
-			tag  = .VAR,
-			data = Var_Address(1 << 32 - 1),
-		}
-
-		append(&program.vars, var)
-		return var
-	}
-
-	return program.vars[addr]
+create_var :: proc(program: ^Program) -> Var_Address {
+	addr := len(program.vars)
+	var := Port{.VAR, NONE}
+	append(&program.vars, var)
+	return Var_Address(addr)
 }
 
 @(private = "file")
-annihilate :: proc(program: ^Program, redex: Pair, ctx: ^Context) {
-	fmt.println("interact: γγ | δδ")
+annihilate :: proc(program: ^Program, redex: Pair) {
+	fmt.println("interact: ANNI")
 
 	a, b := redex.left, redex.right
 
@@ -136,11 +152,11 @@ annihilate :: proc(program: ^Program, redex: Pair, ctx: ^Context) {
 
 	#partial switch a.tag {
 	case .CON:
-		link(program, {node_a.left, node_b.right}, ctx)
-		link(program, {node_a.right, node_b.left}, ctx)
+		link(program, {node_a.left, node_b.right})
+		link(program, {node_a.right, node_b.left})
 	case .DUP:
-		link(program, {node_a.left, node_b.left}, ctx)
-		link(program, {node_a.right, node_b.right}, ctx)
+		link(program, {node_a.left, node_b.left})
+		link(program, {node_a.right, node_b.right})
 	}
 
 	delete_node(program, address_a)
@@ -148,13 +164,13 @@ annihilate :: proc(program: ^Program, redex: Pair, ctx: ^Context) {
 }
 
 @(private = "file")
-void :: proc(program: ^Program, redex: Pair, ctx: ^Context) {
-	fmt.println("interact: εε | REF:REF | REF:ε")
+void :: proc(program: ^Program, redex: Pair) {
+	fmt.println("interact: VOID")
 }
 
 @(private = "file")
-erase :: proc(program: ^Program, redex: Pair, ctx: ^Context) {
-	fmt.println("interact: γε | δε | REF:δ")
+erase :: proc(program: ^Program, redex: Pair) {
+	fmt.println("interact: ERAS")
 	a, b := redex.left, redex.right
 
 	#partial switch a.tag {
@@ -170,15 +186,15 @@ erase :: proc(program: ^Program, redex: Pair, ctx: ^Context) {
 	node := program.nodes[node_addr].(Pair)
 
 	// Erase both ports of the node
-	link(program, {a, node.left}, ctx)
-	link(program, {a, node.right}, ctx)
+	link(program, {a, node.left})
+	link(program, {a, node.right})
 
 	delete_node(program, node_addr)
 }
 
 @(private = "file")
-link :: proc(program: ^Program, redex: Pair, ctx: ^Context) {
-	fmt.println("interact: VAR:_")
+link :: proc(program: ^Program, redex: Pair) {
+	fmt.println("interact: LINK")
 
 	a, b := redex.left, redex.right
 
@@ -189,31 +205,64 @@ link :: proc(program: ^Program, redex: Pair, ctx: ^Context) {
 
 		if a.tag != .VAR {
 			queue.push_back(&program.redexes, Pair{a, b})
-			break
+			return
 		}
 
-		b = enter(program, b, ctx)
+		b = enter(program, b)
 
-		var_name := a.data.(Var_Address)
-		got, exists := ctx.substitutions[var_name]
+		var_addr := a.data.(Var_Address)
 
-		if !exists {
-			ctx.substitutions[var_name] = b
-			break
-		} else {
-			delete_key(&ctx.substitutions, var_name)
-			a = got
+		switch new_a in vars_exchange(program, var_addr, b) {
+		case Port:
+			vars_take(program, var_addr)
+			a = new_a
+		case Empty:
+			return
 		}
 	}
 }
 
-@(private = "file")
-call :: proc(program: ^Program, redex: Pair, ctx: ^Context) {
-	fmt.println("interact: REF:γ")
-	var_addr := redex.left.data.(Var_Address)
-	port := program.vars[var_addr]
+enter :: proc(program: ^Program, var: Port) -> Port {
+	var := var
 
-	link(program, {port, redex.right}, ctx)
+	loop: for var.tag == .VAR {
+		addr := var.data.(Var_Address)
+		val := vars_exchange(program, addr, Empty{})
+		switch val in val {
+		case Empty:
+			break loop
+		case Port:
+			vars_take(program, addr)
+			var = val
+		}
+	}
+
+	return var
+}
+
+vars_exchange :: proc(
+	program: ^Program,
+	addr: Var_Address,
+	new_port: Maybe_Port,
+) -> (
+	old_port: Maybe_Port,
+) {
+	old_port = program.vars[addr]
+	program.vars[addr] = new_port
+	return old_port
+}
+
+vars_take :: proc(program: ^Program, addr: Var_Address) {
+	vars_exchange(program, addr, Empty{})
+}
+
+@(private = "file")
+call :: proc(program: ^Program, redex: Pair) {
+	fmt.println("interact: CALL")
+	addr := redex.left.data.(Ref_Address)
+
+	// copy from book
+	assert(false, "CALL not implemented")
 }
 
 @(private = "file")
@@ -222,7 +271,9 @@ delete_node :: proc(program: ^Program, address: Node_Address) {
 }
 
 @(private = "file")
-create_node :: proc(program: ^Program, kind: Term_Kind, left, right: Port) -> Port {
+create_node :: proc(program: ^Program, kind: Term_Kind, var_left, var_right: Var_Address) -> Port {
+	left := Port{.VAR, var_left}
+	right := Port{.VAR, var_right}
 	for i := 0; i < len(program.nodes); i += 1 {
 		#partial switch _ in &program.nodes[i] {
 		case Empty:
@@ -234,15 +285,56 @@ create_node :: proc(program: ^Program, kind: Term_Kind, left, right: Port) -> Po
 	return Port{tag = kind, data = Node_Address(len(program.nodes) - 1)}
 }
 
-@(private = "file")
-enter :: proc(program: ^Program, port: Port, ctx: ^Context) -> Port {
-	port := port
+@(private = "file", init)
+fmt_program :: proc() {
+	if fmt._user_formatters == nil do fmt.set_user_formatters(new(map[typeid]fmt.User_Formatter))
 
-	for port.tag == .VAR {
-		var_addr := port.data.(Var_Address)
-		port = ctx.substitutions[var_addr] or_break
-		delete_key(&ctx.substitutions, var_addr)
-	}
+	err := fmt.register_user_formatter(
+		type_info_of(Program).id,
+		proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
+			m := cast(^Program)arg.data
 
-	return port
+			switch verb {
+			case 'v':
+				fmt.wprintfln(fi.writer, "Program{{")
+
+				fmt.wprintfln(fi.writer, "\tNodes:")
+
+				for node, index in m.nodes {
+					fmt.wprintf(fi.writer, "\t\t%2d:\t", index)
+					switch node in node {
+					case Empty:
+						fmt.wprintfln(fi.writer, "EMPTY\t,\t,EMPTY")
+					case Pair:
+						fmt.wprintfln(fi.writer, "%v\t,\t%v", node.left, node.right)
+					}
+				}
+
+				fmt.wprintfln(fi.writer, "\tRedexes:")
+
+				for index in 0 ..< queue.len(m.redexes) {
+					redex := queue.get(&m.redexes, index)
+					fmt.wprintfln(fi.writer, "\t\t%2d:\t%v\t~\t%v", index, redex.left, redex.right)
+				}
+
+				fmt.wprintfln(fi.writer, "\tVars:")
+
+				for var, index in m.vars {
+					fmt.wprintf(fi.writer, "\t\t%2d:\t", index)
+					switch var in var {
+					case Empty:
+						fmt.wprintfln(fi.writer, "EMPTY")
+					case Port:
+						fmt.wprintfln(fi.writer, "%v", var)
+					}
+				}
+
+				fmt.wprintf(fi.writer, "}}")
+			case:
+				return false
+			}
+
+			return true
+		},
+	)
 }
