@@ -67,7 +67,7 @@ check_term :: proc(term: ^Term) -> (err: Check_Error) {
 		ctx.variable_count[name] += 1
 		if ctx.variable_count[name] > 2 {
 			error(
-				"@def %s: variable %s referenced more than twice in a definition",
+				"def @%s: variable %s referenced more than twice in a definition",
 				ctx.def_name,
 				name,
 			)
@@ -78,7 +78,7 @@ check_term :: proc(term: ^Term) -> (err: Check_Error) {
 		name := term.data.(Var_Data).name
 		if name not_in ctx.definition_names {
 			error(
-				"@def %s: reference %s is not defined at %d:%d",
+				"def @%s: reference @%s is not defined at %d:%d",
 				ctx.def_name,
 				name,
 				term.pos.line,

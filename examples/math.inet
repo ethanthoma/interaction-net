@@ -1,4 +1,0 @@
-@root = a & CON(@one, b) ~ @succ & CON(b, a) ~ @succ
-
-@succ = CON(CON(@one, a), a)
-@one = CON(a, a)

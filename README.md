@@ -7,14 +7,20 @@ The grammar is based on [HVM](https://github.com/HigherOrderCO/HVM) and their
 
 ## Running
 
-If you use nix, you can simply run
+If you use nix and want to run an example, you can run
+```
+nix run github:ethanthoma/interaction-net example <example-name>
+```
+This will run one of the examples in [examples](./examples/) and print out its 
+contents.
+
+If you want to run your own file, you can simply run
 
 ```
-nix run github:ethanthoma/interaction-net -- <filename>
+nix run github:ethanthoma/interaction-net run <filename>
 ```
 
-You can look in [examples](./examples/) or read the [grammar](./grammar.ebnf) 
-and make your own.
+Read the [grammar](./grammar.ebnf) to make your own or simply copy an example.
 
 ## Resources
 - https://arxiv.org/pdf/1505.07164
