@@ -11,7 +11,10 @@ Def :: struct {
 	vars:    int,
 }
 
-Book :: [dynamic]Def
+Book :: struct {
+	defs:  [dynamic]Def,
+	names: [dynamic]string,
+}
 
 @(private = "file")
 Context :: struct {
@@ -22,12 +25,17 @@ Context :: struct {
 }
 
 make_book :: proc() -> Book {
-	return Book(make([dynamic]Def))
+	book: Book
+
+	book.defs = make([dynamic]Def)
+	book.names = make([dynamic]string)
+
+	return book
 }
 
 delete_book :: proc(book: ^Book) {
-	defs := cast(^[dynamic]Def)book
-	delete(defs^)
+	delete(book.defs)
+	delete(book.names)
 }
 
 generate :: proc(book: ^Book, definitions: map[string]Definition) {
@@ -50,9 +58,14 @@ generate :: proc(book: ^Book, definitions: map[string]Definition) {
 generate_definition :: proc(book: ^Book, definition: Definition) {
 	addr := add_or_get_ref_addr(book, definition.name)
 
-	assign_at_book(book, addr, {nodes = make([dynamic]Pair), redexes = make([dynamic]Pair)})
+	assign_at(
+		&book.defs,
+		int(addr),
+		Def{nodes = make([dynamic]Pair), redexes = make([dynamic]Pair)},
+	)
+	assign_at(&book.names, int(addr), definition.name)
 
-	def := &book[addr]
+	def := &book.defs[addr]
 
 	def.root = generate_term(book, def, definition.root)
 
@@ -71,13 +84,6 @@ generate_definition :: proc(book: ^Book, definition: Definition) {
 		(!parsed) or_continue
 		generate_definition(book, ctx.definitions[ref])
 	}
-}
-
-@(private = "file")
-assign_at_book :: proc(book: ^Book, addr: Ref_Address, def: Def) {
-	defs := cast(^[dynamic]Def)book
-
-	assign_at(defs, int(addr), def)
 }
 
 @(private = "file")
@@ -146,11 +152,11 @@ fmt_book :: proc() {
 
 			switch verb {
 			case 'v':
-				fmt.wprintln(fi.writer, "Book{")
-				for def, index in m {
-					fmt.wprintfln(fi.writer, "%2d: %v", index, def)
+				fmt.wprintln(fi.writer, "Book[")
+				for def, index in m.defs {
+					fmt.wprintfln(fi.writer, "\t@%v: %v,", m.names[index], def)
 				}
-				fmt.wprint(fi.writer, "}")
+				fmt.wprint(fi.writer, "]")
 			case:
 				return false
 			}
@@ -171,22 +177,28 @@ fmt_def :: proc() {
 
 			switch verb {
 			case 'v':
-				fmt.wprintfln(fi.writer, "Def{{")
+				fmt.wprintln(fi.writer, "Def{")
 
-				fmt.wprintfln(fi.writer, "\tNodes:")
+				fmt.wprintln(fi.writer, "\t\tNodes:")
 
 				for node, index in m.nodes {
-					fmt.wprintfln(fi.writer, "\t\t%2d:\t%d\t,\t%d", index, node.left, node.right)
+					fmt.wprintfln(fi.writer, "\t\t\t%2d:\t%d\t,\t%d", index, node.left, node.right)
 				}
 
-				fmt.wprintfln(fi.writer, "\tRedexes:")
+				fmt.wprintln(fi.writer, "\t\tRedexes:")
 
 				for redex, index in m.redexes {
-					fmt.wprintfln(fi.writer, "\t\t%2d:\t%d\t~\t%d", index, redex.left, redex.right)
+					fmt.wprintfln(
+						fi.writer,
+						"\t\t\t%2d:\t%d\t~\t%d",
+						index,
+						redex.left,
+						redex.right,
+					)
 				}
 
-				fmt.wprintfln(fi.writer, "\tRoot:\t\t%d", m.root)
-				fmt.wprintf(fi.writer, "}}")
+				fmt.wprintfln(fi.writer, "\t\tRoot:\t\t%d", m.root)
+				fmt.wprint(fi.writer, "\t}")
 			case:
 				return false
 			}

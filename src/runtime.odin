@@ -2,24 +2,18 @@ package main
 
 import "core:container/queue"
 import "core:fmt"
+import "core:strings"
 import "core:time"
 
-ROOT :: 0
+// address of ROOT var
+ROOT :: Var_Address(0)
+// address of MAIN ref
+MAIN :: Ref_Address(0)
 
 Program :: struct {
-	nodes:   [dynamic]Maybe_Pair,
+	nodes:   [dynamic]Maybe(Pair),
 	redexes: queue.Queue(Pair),
-	vars:    [dynamic]Maybe_Port,
-}
-
-Maybe_Port :: union {
-	Empty,
-	Port,
-}
-
-Maybe_Pair :: union {
-	Empty,
-	Pair,
+	vars:    [dynamic]Maybe(Port),
 }
 
 @(private = "file")
@@ -33,8 +27,8 @@ run :: proc(book: ^Book) {
 	context.user_ptr = &ctx
 
 	program: Program = {
-		nodes = make([dynamic]Maybe_Pair),
-		vars  = make([dynamic]Maybe_Port),
+		nodes = make([dynamic]Maybe(Pair)),
+		vars  = make([dynamic]Maybe(Port)),
 	}
 	queue.init(&program.redexes)
 
@@ -42,8 +36,8 @@ run :: proc(book: ^Book) {
 	defer queue.destroy(&program.redexes)
 	defer delete(program.vars)
 
-	assign_at(&program.vars, 0, Empty{})
-	queue.push_front(&program.redexes, Pair{{.REF, Ref_Address(ROOT)}, {.VAR, Var_Address(ROOT)}})
+	assign_at(&program.vars, int(ROOT), nil)
+	queue.push_front(&program.redexes, Pair{{.REF, MAIN}, {.VAR, ROOT}})
 
 	timer := time.Stopwatch{}
 
@@ -56,7 +50,10 @@ run :: proc(book: ^Book) {
 
 	time.stopwatch_stop(&timer)
 
-	fmt.println(enter(&program, {.VAR, Var_Address(0)}))
+	result := make_result(&program)
+	defer delete_result(result)
+
+	fmt.printfln("Result:\t%v", result)
 	fmt.printfln("Interactions:\t%d", ctx.interactions)
 	fmt.printfln("Time:\t%v", time.stopwatch_duration(timer))
 	fmt.printfln(
@@ -64,6 +61,54 @@ run :: proc(book: ^Book) {
 		(f64(ctx.interactions) / 1_000_000) /
 		time.duration_seconds(time.stopwatch_duration(timer)),
 	)
+}
+
+make_result :: proc(program: ^Program) -> string {
+	sb := strings.builder_make()
+
+	recursive_define(program, {.VAR, ROOT}, &sb)
+
+	return strings.to_string(sb)
+}
+
+delete_result :: proc(result: string) {
+	delete(result)
+}
+
+@(private = "file")
+recursive_define :: proc(program: ^Program, port: Port, sb: ^strings.Builder) {
+	switch port.tag {
+	case .ERA:
+		fmt.sbprint(sb, "ERA()")
+	case .REF:
+		name := (cast(^Context)context.user_ptr).book.names[port.data.(Ref_Address)]
+		fmt.sbprintf(sb, "@%v", name)
+	case .VAR:
+		got := enter(program, port)
+		if got != port {
+			recursive_define(program, got, sb)
+			return
+		} else {
+			fmt.sbprintf(sb, "v%d", port.data.(Var_Address))
+			return
+		}
+	case .CON:
+		pair := program.nodes[port.data.(Node_Address)]
+		fmt.sbprint(sb, "CON(")
+		recursive_define(program, pair.?.left, sb)
+		fmt.sbprint(sb, ", ")
+		recursive_define(program, pair.?.right, sb)
+		fmt.sbprint(sb, ")")
+		return
+	case .DUP:
+		pair := program.nodes[port.data.(Node_Address)]
+		fmt.sbprint(sb, "DUP(")
+		recursive_define(program, pair.?.left, sb)
+		fmt.sbprint(sb, ", ")
+		recursive_define(program, pair.?.right, sb)
+		fmt.sbprint(sb, ")")
+		return
+	}
 }
 
 @(private = "file")
@@ -89,7 +134,7 @@ interact :: proc(program: ^Program, redex: Pair) {
 	case {.CON, .REF}:
 		call(program, redex)
 	case:
-		if a.tag == .REF && b == {.VAR, Var_Address(0)} do call(program, redex)
+		if a.tag == .REF && b == {.VAR, ROOT} do call(program, redex)
 		else if a.tag == .VAR || b.tag == .VAR {
 			link(program, redex)
 			ctx.interactions -= 1
@@ -134,8 +179,48 @@ commute :: proc(program: ^Program, redex: Pair) {
 @(private = "file")
 create_var :: proc(program: ^Program) -> Var_Address {
 	addr := len(program.vars)
-	append(&program.vars, Empty{})
+	append(&program.vars, nil)
 	return Var_Address(addr)
+}
+
+@(private = "file")
+create_node :: proc(program: ^Program, kind: Term_Kind, var_left, var_right: Var_Address) -> Port {
+	left := Port{.VAR, var_left}
+	right := Port{.VAR, var_right}
+	for i := 0; i < len(program.nodes); i += 1 {
+		#partial switch _ in &program.nodes[i] {
+		case nil:
+			program.nodes[i] = Pair{left, right}
+			return Port{tag = kind, data = Node_Address(i)}
+		}
+	}
+	append(&program.nodes, Pair{left, right})
+	return Port{tag = kind, data = Node_Address(len(program.nodes) - 1)}
+}
+
+@(private = "file")
+delete_node :: proc(program: ^Program, address: Node_Address) {
+	program.nodes[address] = nil
+}
+
+@(private = "file")
+erase :: proc(program: ^Program, redex: Pair) {
+	a, b := redex.left, redex.right
+
+	#partial switch a.tag {
+	case .CON, .DUP:
+		a, b = b, a
+	}
+
+	// a is ERA or REF
+	// b is CON or DUP
+	node_addr := b.data.(Node_Address)
+	node := program.nodes[node_addr].(Pair)
+
+	delete_node(program, node_addr)
+
+	link(program, {a, node.left})
+	link(program, {a, node.right})
 }
 
 @(private = "file")
@@ -165,27 +250,6 @@ annihilate :: proc(program: ^Program, redex: Pair) {
 void :: proc(program: ^Program, redex: Pair) {}
 
 @(private = "file")
-erase :: proc(program: ^Program, redex: Pair) {
-	a, b := redex.left, redex.right
-
-	#partial switch a.tag {
-	case .CON, .DUP:
-		a, b = b, a
-	}
-
-	// a is ERA or REF
-	// b is CON or DUP
-	node_addr := b.data.(Node_Address)
-	node := program.nodes[node_addr].(Pair)
-
-	delete_node(program, node_addr)
-
-	// Erase both ports of the node
-	link(program, {a, node.left})
-	link(program, {a, node.right})
-}
-
-@(private = "file")
 link :: proc(program: ^Program, redex: Pair) {
 	a, b := redex.left, redex.right
 
@@ -207,7 +271,7 @@ link :: proc(program: ^Program, redex: Pair) {
 		case Port:
 			vars_take(program, var_addr)
 			a = new_a
-		case Empty:
+		case nil:
 			break loop
 		}
 	}
@@ -219,9 +283,9 @@ enter :: proc(program: ^Program, var: Port) -> Port {
 
 	loop: for var.tag == .VAR {
 		addr := var.data.(Var_Address)
-		val := vars_exchange(program, addr, Empty{})
+		val := vars_exchange(program, addr, nil)
 		switch val in val {
-		case Empty:
+		case nil:
 			break loop
 		case Port:
 			vars_take(program, addr)
@@ -236,9 +300,9 @@ enter :: proc(program: ^Program, var: Port) -> Port {
 vars_exchange :: proc(
 	program: ^Program,
 	addr: Var_Address,
-	new_port: Maybe_Port,
+	new_port: Maybe(Port),
 ) -> (
-	old_port: Maybe_Port,
+	old_port: Maybe(Port),
 ) {
 	old_port = program.vars[addr]
 	program.vars[addr] = new_port
@@ -247,7 +311,7 @@ vars_exchange :: proc(
 
 @(private = "file")
 vars_take :: proc(program: ^Program, addr: Var_Address) {
-	vars_exchange(program, addr, Empty{})
+	vars_exchange(program, addr, nil)
 }
 
 @(private = "file")
@@ -258,7 +322,7 @@ call :: proc(program: ^Program, redex: Pair) {
 
 	addr := a.data.(Ref_Address)
 
-	def := (cast(^Context)context.user_ptr).book[addr]
+	def := (cast(^Context)context.user_ptr).book.defs[addr]
 
 	offset_vars := len(program.vars)
 	offset_node := len(program.nodes)
@@ -279,6 +343,9 @@ call :: proc(program: ^Program, redex: Pair) {
 		create_var(program)
 	}
 
+	// create_node fills in gaps
+	// we use a constant offset so we have to append only
+	// this means the that the node buffer only grows, never shrinks
 	for node in def.nodes {
 		left := node.left
 		right := node.right
@@ -289,7 +356,7 @@ call :: proc(program: ^Program, redex: Pair) {
 
 		for i := 0; i < len(program.nodes); i += 1 {
 			#partial switch _ in &program.nodes[i] {
-			case Empty:
+			case nil:
 				program.nodes[i] = Pair{left, right}
 			}
 		}
@@ -306,26 +373,6 @@ call :: proc(program: ^Program, redex: Pair) {
 		)
 	}
 	link(program, {adjust_addr(def.root, offset_vars, offset_node), b})
-}
-
-@(private = "file")
-delete_node :: proc(program: ^Program, address: Node_Address) {
-	program.nodes[address] = Empty{}
-}
-
-@(private = "file")
-create_node :: proc(program: ^Program, kind: Term_Kind, var_left, var_right: Var_Address) -> Port {
-	left := Port{.VAR, var_left}
-	right := Port{.VAR, var_right}
-	for i := 0; i < len(program.nodes); i += 1 {
-		#partial switch _ in &program.nodes[i] {
-		case Empty:
-			program.nodes[i] = Pair{left, right}
-			return Port{tag = kind, data = Node_Address(i)}
-		}
-	}
-	append(&program.nodes, Pair{left, right})
-	return Port{tag = kind, data = Node_Address(len(program.nodes) - 1)}
 }
 
 @(private = "file", init)
@@ -345,7 +392,7 @@ fmt_program :: proc() {
 
 				for node, index in m.nodes {
 					switch node in node {
-					case Empty:
+					case nil:
 					case Pair:
 						fmt.wprintfln(
 							fi.writer,
@@ -367,15 +414,13 @@ fmt_program :: proc() {
 				fmt.wprintfln(fi.writer, "\tVars:")
 
 				for var, index in m.vars {
-					if index == 0 {
-						fmt.wprintf(fi.writer, "\t\tROOT:\t")
-					} else {
-						fmt.wprintf(fi.writer, "\t\t%4d:\t", index)
-					}
-					switch var in var {
-					case Empty:
-						fmt.wprintfln(fi.writer, "EMPTY")
+					#partial switch var in var {
 					case Port:
+						if index == int(ROOT) {
+							fmt.wprintf(fi.writer, "\t\tROOT:\t")
+						} else {
+							fmt.wprintf(fi.writer, "\t\t%4d:\t", index)
+						}
 						fmt.wprintfln(fi.writer, "%v", var)
 					}
 				}

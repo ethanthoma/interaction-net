@@ -1,7 +1,4 @@
-@root = a & @succ ~ CON(@two, a)
+@root = a & CON(@one, b) ~ @succ & CON(b, a) ~ @succ
 
-@succ = a & a ~ DUP(CON(b, @zero), b)
-
-@two = a & @succ ~ CON(@one, a)
-@one = a & @succ ~ CON(@zero, a)
-@zero = CON(a, a)
+@succ = CON(CON(@one, a), a)
+@one = CON(a, a)
