@@ -37,7 +37,28 @@ fmt_port :: proc() {
 				switch data in m.data {
 				case Empty:
 					fmt.wprint(fi.writer, "EMPTY")
-				case Node_Address, Var_Address, Ref_Address:
+				case Var_Address:
+					if int(data) == int(ROOT) {
+						fmt.wprintf(fi.writer, " ROOT")
+					} else {
+						fmt.wprintf(fi.writer, "%5d", data)
+					}
+				case Ref_Address:
+					if int(data) == int(ROOT) {
+						fmt.wprintf(fi.writer, "@ROOT")
+					} else {
+						fmt.wprintf(fi.writer, "%5d", data)
+					}
+				case Node_Address:
+					fmt.wprintf(fi.writer, "%5d", data)
+				}
+			case 'd':
+				fmt.wprintf(fi.writer, "%v:", m.tag)
+
+				switch data in m.data {
+				case Empty:
+					fmt.wprint(fi.writer, "EMPTY")
+				case Var_Address, Ref_Address, Node_Address:
 					fmt.wprintf(fi.writer, "%5d", data)
 				}
 			case:

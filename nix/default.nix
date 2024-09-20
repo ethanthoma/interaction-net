@@ -11,7 +11,7 @@ rec {
   nativeBuildInputs = [ odin ];
 
   buildPhase = ''
-    odin build $src -out:${pname}
+    odin build $src -show-timings -out:${pname} -microarch:native -no-bounds-check -o:speed
     mkdir -p $out/bin
     mv ${pname} $out/bin/
   '';

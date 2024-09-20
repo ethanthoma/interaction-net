@@ -2,9 +2,9 @@ package main
 
 import "core:container/queue"
 import "core:fmt"
+import "core:time"
 
-ROOT :: Ref_Address(0)
-NONE :: Var_Address(1 << 32 - 1)
+ROOT :: 0
 
 Program :: struct {
 	nodes:   [dynamic]Maybe_Pair,
@@ -24,11 +24,12 @@ Maybe_Pair :: union {
 
 @(private = "file")
 Context :: struct {
-	book: ^Book,
+	book:         ^Book,
+	interactions: int,
 }
 
 run :: proc(book: ^Book) {
-	ctx := Context{book}
+	ctx := Context{book, 0}
 	context.user_ptr = &ctx
 
 	program: Program = {
@@ -42,21 +43,33 @@ run :: proc(book: ^Book) {
 	defer delete(program.vars)
 
 	assign_at(&program.vars, 0, Empty{})
-	queue.push_front(&program.redexes, Pair{{.REF, ROOT}, {.VAR, Var_Address(0)}})
+	queue.push_front(&program.redexes, Pair{{.REF, Ref_Address(ROOT)}, {.VAR, Var_Address(ROOT)}})
 
-	fmt.println(program)
+	timer := time.Stopwatch{}
+
+	time.stopwatch_start(&timer)
 
 	for {
 		redex := queue.pop_front_safe(&program.redexes) or_break
 		interact(&program, redex)
 	}
+
+	time.stopwatch_stop(&timer)
+
+	fmt.println(enter(&program, {.VAR, Var_Address(0)}))
+	fmt.printfln("Interactions:\t%d", ctx.interactions)
+	fmt.printfln("Time:\t%v", time.stopwatch_duration(timer))
+	fmt.printfln(
+		"MIps:\t%f",
+		(f64(ctx.interactions) / 1_000_000) /
+		time.duration_seconds(time.stopwatch_duration(timer)),
+	)
 }
 
 @(private = "file")
 interact :: proc(program: ^Program, redex: Pair) {
 	a, b := redex.left, redex.right
-
-	if a.tag == .REF && b == {.VAR, Var_Address(0)} do call(program, redex)
+	ctx := cast(^Context)context.user_ptr
 
 	if a.tag < b.tag do a, b = b, a
 
@@ -64,41 +77,30 @@ interact :: proc(program: ^Program, redex: Pair) {
 		tag_a: Term_Kind,
 		tag_b: Term_Kind,
 	}({a.tag, b.tag})
-
 	switch tags {
-	case {.CON, .DUP}, {.DUP, .CON}:
+	case {.DUP, .CON}:
 		commute(program, redex)
-	case {.CON, .ERA}, {.ERA, .CON}:
+	case {.CON, .ERA}, {.DUP, .ERA}, {.DUP, .REF}:
 		erase(program, redex)
-	case {.DUP, .ERA}, {.ERA, .DUP}:
-		erase(program, redex)
-	case {.CON, .CON}:
+	case {.CON, .CON}, {.DUP, .DUP}:
 		annihilate(program, redex)
-	case {.DUP, .DUP}:
-		annihilate(program, redex)
-	case {.ERA, .ERA}:
+	case {.ERA, .ERA}, {.REF, .REF}, {.REF, .ERA}:
 		void(program, redex)
-	case {.REF, .REF}:
-		void(program, redex)
-	case {.REF, .ERA}, {.ERA, .REF}:
-		void(program, redex)
-	case {.REF, .CON}, {.CON, .REF}:
+	case {.CON, .REF}:
 		call(program, redex)
-	case {.REF, .DUP}, {.DUP, .REF}:
-		erase(program, redex)
 	case:
-		if a.tag == .VAR || b.tag == .VAR {
+		if a.tag == .REF && b == {.VAR, Var_Address(0)} do call(program, redex)
+		else if a.tag == .VAR || b.tag == .VAR {
 			link(program, redex)
-		} else {
-			fmt.eprintfln("Missing rule for %v:%v", a.tag, b.tag)
-		}
+			ctx.interactions -= 1
+		} else do fmt.eprintfln("Missing rule for %v:%v", a.tag, b.tag)
 	}
+
+	ctx.interactions += 1
 }
 
 @(private = "file")
 commute :: proc(program: ^Program, redex: Pair) {
-	fmt.println("interact: COMM")
-
 	con, dup := redex.left, redex.right
 	if con.tag == .DUP {
 		con, dup = dup, con
@@ -112,19 +114,18 @@ commute :: proc(program: ^Program, redex: Pair) {
 
 	x1 := create_var(program)
 	x2 := create_var(program)
-	y1 := create_var(program)
-	y2 := create_var(program)
+	x3 := create_var(program)
+	x4 := create_var(program)
 
-	new_con1 := create_node(program, .CON, x2, x1)
-	new_con2 := create_node(program, .CON, y2, y1)
+	node_1 := create_node(program, .CON, x1, x2)
+	node_2 := create_node(program, .CON, x3, x4)
+	node_3 := create_node(program, .DUP, x1, x3)
+	node_4 := create_node(program, .DUP, x2, x4)
 
-	new_dup1 := create_node(program, .DUP, y2, x2)
-	new_dup2 := create_node(program, .DUP, y1, x1)
-
-	link(program, Pair{new_dup1, con_node.right})
-	link(program, Pair{new_dup2, con_node.left})
-	link(program, Pair{new_con1, dup_node.right})
-	link(program, Pair{new_con2, dup_node.left})
+	link(program, {node_1, dup_node.left})
+	link(program, {node_2, dup_node.right})
+	link(program, {node_3, con_node.left})
+	link(program, {node_4, con_node.right})
 
 	delete_node(program, con_addr)
 	delete_node(program, dup_addr)
@@ -133,15 +134,12 @@ commute :: proc(program: ^Program, redex: Pair) {
 @(private = "file")
 create_var :: proc(program: ^Program) -> Var_Address {
 	addr := len(program.vars)
-	var := Port{.VAR, NONE}
-	append(&program.vars, var)
+	append(&program.vars, Empty{})
 	return Var_Address(addr)
 }
 
 @(private = "file")
 annihilate :: proc(program: ^Program, redex: Pair) {
-	fmt.println("interact: ANNI")
-
 	a, b := redex.left, redex.right
 
 	address_a := a.data.(Node_Address)
@@ -164,19 +162,14 @@ annihilate :: proc(program: ^Program, redex: Pair) {
 }
 
 @(private = "file")
-void :: proc(program: ^Program, redex: Pair) {
-	fmt.println("interact: VOID")
-}
+void :: proc(program: ^Program, redex: Pair) {}
 
 @(private = "file")
 erase :: proc(program: ^Program, redex: Pair) {
-	fmt.println("interact: ERAS")
 	a, b := redex.left, redex.right
 
 	#partial switch a.tag {
-	case .CON:
-		a, b = b, a
-	case .DUP:
+	case .CON, .DUP:
 		a, b = b, a
 	}
 
@@ -185,20 +178,18 @@ erase :: proc(program: ^Program, redex: Pair) {
 	node_addr := b.data.(Node_Address)
 	node := program.nodes[node_addr].(Pair)
 
+	delete_node(program, node_addr)
+
 	// Erase both ports of the node
 	link(program, {a, node.left})
 	link(program, {a, node.right})
-
-	delete_node(program, node_addr)
 }
 
 @(private = "file")
 link :: proc(program: ^Program, redex: Pair) {
-	fmt.println("interact: LINK")
-
 	a, b := redex.left, redex.right
 
-	for {
+	loop: for {
 		if a.tag != .VAR {
 			a, b = b, a
 		}
@@ -217,11 +208,12 @@ link :: proc(program: ^Program, redex: Pair) {
 			vars_take(program, var_addr)
 			a = new_a
 		case Empty:
-			return
+			break loop
 		}
 	}
 }
 
+@(private = "file")
 enter :: proc(program: ^Program, var: Port) -> Port {
 	var := var
 
@@ -240,6 +232,7 @@ enter :: proc(program: ^Program, var: Port) -> Port {
 	return var
 }
 
+@(private = "file")
 vars_exchange :: proc(
 	program: ^Program,
 	addr: Var_Address,
@@ -252,17 +245,67 @@ vars_exchange :: proc(
 	return old_port
 }
 
+@(private = "file")
 vars_take :: proc(program: ^Program, addr: Var_Address) {
 	vars_exchange(program, addr, Empty{})
 }
 
 @(private = "file")
 call :: proc(program: ^Program, redex: Pair) {
-	fmt.println("interact: CALL")
-	addr := redex.left.data.(Ref_Address)
+	a, b := redex.left, redex.right
 
-	// copy from book
-	assert(false, "CALL not implemented")
+	if a.tag != .REF do a, b = b, a
+
+	addr := a.data.(Ref_Address)
+
+	def := (cast(^Context)context.user_ptr).book[addr]
+
+	offset_vars := len(program.vars)
+	offset_node := len(program.nodes)
+	adjust_addr := proc(port: Port, offset_vars, offset_node: int) -> Port {
+		port := port
+
+		#partial switch port.tag {
+		case .CON, .DUP:
+			port.data = Node_Address(offset_node + int(port.data.(Node_Address)))
+		case .VAR:
+			port.data = Var_Address(offset_vars + int(port.data.(Var_Address)))
+		}
+
+		return port
+	}
+
+	for var in 0 ..< def.vars {
+		create_var(program)
+	}
+
+	for node in def.nodes {
+		left := node.left
+		right := node.right
+
+
+		left = adjust_addr(left, offset_vars, offset_node)
+		right = adjust_addr(right, offset_vars, offset_node)
+
+		for i := 0; i < len(program.nodes); i += 1 {
+			#partial switch _ in &program.nodes[i] {
+			case Empty:
+				program.nodes[i] = Pair{left, right}
+			}
+		}
+		append(&program.nodes, Pair{left, right})
+	}
+
+	for pair in def.redexes {
+		link(
+			program,
+			{
+				adjust_addr(pair.left, offset_vars, offset_node),
+				adjust_addr(pair.right, offset_vars, offset_node),
+			},
+		)
+	}
+	link(program, {adjust_addr(def.root, offset_vars, offset_node), b})
 }
 
 @(private = "file")
@@ -301,12 +344,16 @@ fmt_program :: proc() {
 				fmt.wprintfln(fi.writer, "\tNodes:")
 
 				for node, index in m.nodes {
-					fmt.wprintf(fi.writer, "\t\t%2d:\t", index)
 					switch node in node {
 					case Empty:
-						fmt.wprintfln(fi.writer, "EMPTY\t,\t,EMPTY")
 					case Pair:
-						fmt.wprintfln(fi.writer, "%v\t,\t%v", node.left, node.right)
+						fmt.wprintfln(
+							fi.writer,
+							"\t\t%4d:\t%v\t,\t%v",
+							index,
+							node.left,
+							node.right,
+						)
 					}
 				}
 
@@ -314,13 +361,17 @@ fmt_program :: proc() {
 
 				for index in 0 ..< queue.len(m.redexes) {
 					redex := queue.get(&m.redexes, index)
-					fmt.wprintfln(fi.writer, "\t\t%2d:\t%v\t~\t%v", index, redex.left, redex.right)
+					fmt.wprintfln(fi.writer, "\t\t%4d:\t%v\t~\t%v", index, redex.left, redex.right)
 				}
 
 				fmt.wprintfln(fi.writer, "\tVars:")
 
 				for var, index in m.vars {
-					fmt.wprintf(fi.writer, "\t\t%2d:\t", index)
+					if index == 0 {
+						fmt.wprintf(fi.writer, "\t\tROOT:\t")
+					} else {
+						fmt.wprintf(fi.writer, "\t\t%4d:\t", index)
+					}
 					switch var in var {
 					case Empty:
 						fmt.wprintfln(fi.writer, "EMPTY")

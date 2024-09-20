@@ -31,6 +31,8 @@ tokenize :: proc(t: ^Tokenizer) -> (tokens: []Token, ok: bool = true) {
 		scan(t) or_return
 	}
 
+	add_token(t, .EOF)
+
 	return t.tokens[:], true
 }
 
@@ -45,7 +47,6 @@ scan :: proc(t: ^Tokenizer) -> (ok: bool = true) {
 
 	c, not_eof := advance_rune(t)
 	if !not_eof {
-		add_token(t, .EOF)
 		return true
 	}
 
@@ -165,6 +166,7 @@ test_tokenize_simple :: proc(t: ^testing.T) {
 		.IDENTIFIER,
 		.LEFT_PAREN,
 		.RIGHT_PAREN,
+		.EOF,
 	}
 
 	testing.expectf(

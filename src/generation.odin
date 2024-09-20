@@ -1,14 +1,14 @@
 package main
 
 import "base:runtime"
-import "core:container/queue"
 import "core:fmt"
 import "core:strings"
 
 Def :: struct {
 	nodes:   [dynamic]Pair,
-	redexes: queue.Queue(Pair),
+	redexes: [dynamic]Pair,
 	root:    Port,
+	vars:    int,
 }
 
 Book :: [dynamic]Def
@@ -50,7 +50,7 @@ generate :: proc(book: ^Book, definitions: map[string]Definition) {
 generate_definition :: proc(book: ^Book, definition: Definition) {
 	addr := add_or_get_ref_addr(book, definition.name)
 
-	assign_at_book(book, addr, {nodes = make([dynamic]Pair), redexes = queue.Queue(Pair){}})
+	assign_at_book(book, addr, {nodes = make([dynamic]Pair), redexes = make([dynamic]Pair)})
 
 	def := &book[addr]
 
@@ -59,10 +59,13 @@ generate_definition :: proc(book: ^Book, definition: Definition) {
 	for redex in definition.redexes {
 		left := generate_term(book, def, redex.left)
 		right := generate_term(book, def, redex.right)
-		queue.push_back(&def.redexes, Pair{left, right})
+		append(&def.redexes, Pair{left, right})
 	}
 
 	ctx := cast(^Context)context.user_ptr
+
+	def.vars = len(ctx.vars)
+
 	ctx.parsed_refs[definition.name] = true
 	for ref, parsed in ctx.parsed_refs {
 		(!parsed) or_continue
@@ -173,17 +176,16 @@ fmt_def :: proc() {
 				fmt.wprintfln(fi.writer, "\tNodes:")
 
 				for node, index in m.nodes {
-					fmt.wprintfln(fi.writer, "\t\t%2d:\t%v\t,\t%v", index, node.left, node.right)
+					fmt.wprintfln(fi.writer, "\t\t%2d:\t%d\t,\t%d", index, node.left, node.right)
 				}
 
 				fmt.wprintfln(fi.writer, "\tRedexes:")
 
-				for index in 0 ..< queue.len(m.redexes) {
-					redex := queue.get(&m.redexes, index)
-					fmt.wprintfln(fi.writer, "\t\t%2d:\t%v\t~\t%v", index, redex.left, redex.right)
+				for redex, index in m.redexes {
+					fmt.wprintfln(fi.writer, "\t\t%2d:\t%d\t~\t%d", index, redex.left, redex.right)
 				}
 
-				fmt.wprintfln(fi.writer, "\tRoot:\t\t%v", m.root)
+				fmt.wprintfln(fi.writer, "\tRoot:\t\t%d", m.root)
 				fmt.wprintf(fi.writer, "}}")
 			case:
 				return false

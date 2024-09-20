@@ -1,6 +1,5 @@
 package main
 
-import "core:container/queue"
 import "core:fmt"
 import "core:os"
 
@@ -19,15 +18,31 @@ main :: proc() {
 	}
 	defer delete(data)
 
-	compiler := make_compiler(string(data))
-	book, compile_ok := compile(&compiler)
+	book, compile_ok := compile(string(data))
 	if !compile_ok {
-		fmt.eprintfln("Failed to compiled %s", filename)
 		os.exit(1)
 	}
 	defer delete_book(&book)
 
-	fmt.printfln("%v", book)
-
 	run(&book)
+}
+
+compile :: proc(input: string) -> (book: Book, ok: bool = true) {
+	tokenizer := make_tokenizer(input)
+	defer delete_tokenizer(&tokenizer)
+
+	tokens := tokenize(&tokenizer) or_return
+
+	parser := make_parser(tokens)
+	defer delete_parser(&parser)
+
+	definitions := parse(&parser) or_return
+
+	(check(definitions) == .None) or_return
+
+	book = make_book()
+
+	generate(&book, definitions)
+
+	return book, true
 }
