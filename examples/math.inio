@@ -1,10 +1,4 @@
-@root = CON(a, b)
-    & CON(@zero, c) ~ @succ & CON(c, DUP(d, a)) ~ @succ 
-    & CON(d, e) ~ @decr & CON(e, b) ~ @decr 
-
-@decr = CON(a, CON(a, @one))
+@root = a
+    & CON(0, c) ~ @succ & CON(c, a) ~ @succ 
  
-@succ = CON(CON(@one, a), a)
-
-@one = CON(@zero, @zero)
-@zero = CON(a, a)
+@succ = CON(CON(1, a), a)
