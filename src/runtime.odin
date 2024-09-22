@@ -14,6 +14,7 @@ Program :: struct {
 	nodes:   [dynamic]Maybe(Pair),
 	redexes: queue.Queue(Pair),
 	vars:    [dynamic]Maybe(Port),
+	nums:    [dynamic]u32,
 }
 
 @(private = "file")
@@ -29,12 +30,14 @@ run :: proc(book: ^Book) {
 	program: Program = {
 		nodes = make([dynamic]Maybe(Pair)),
 		vars  = make([dynamic]Maybe(Port)),
+		nums  = make([dynamic]u32),
 	}
 	queue.init(&program.redexes)
 
 	defer delete(program.nodes)
-	defer queue.destroy(&program.redexes)
 	defer delete(program.vars)
+	defer delete(program.nums)
+	defer queue.destroy(&program.redexes)
 
 	assign_at(&program.vars, int(ROOT), nil)
 	queue.push_front(&program.redexes, Pair{{.REF, MAIN}, {.VAR, ROOT}})
@@ -66,7 +69,7 @@ run :: proc(book: ^Book) {
 make_result :: proc(program: ^Program) -> string {
 	sb := strings.builder_make()
 
-	recursive_define(program, {.VAR, ROOT}, &sb)
+	recursive_print(program, {.VAR, ROOT}, &sb)
 
 	return strings.to_string(sb)
 }
@@ -76,7 +79,7 @@ delete_result :: proc(result: string) {
 }
 
 @(private = "file")
-recursive_define :: proc(program: ^Program, port: Port, sb: ^strings.Builder) {
+recursive_print :: proc(program: ^Program, port: Port, sb: ^strings.Builder) {
 	switch port.tag {
 	case .ERA:
 		fmt.sbprint(sb, "ERA()")
@@ -86,28 +89,39 @@ recursive_define :: proc(program: ^Program, port: Port, sb: ^strings.Builder) {
 	case .VAR:
 		got := enter(program, port)
 		if got != port {
-			recursive_define(program, got, sb)
-			return
+			recursive_print(program, got, sb)
 		} else {
 			fmt.sbprintf(sb, "v%d", port.data.(Var_Address))
-			return
 		}
 	case .CON:
 		pair := program.nodes[port.data.(Node_Address)]
 		fmt.sbprint(sb, "CON(")
-		recursive_define(program, pair.?.left, sb)
+		recursive_print(program, pair.?.left, sb)
 		fmt.sbprint(sb, ", ")
-		recursive_define(program, pair.?.right, sb)
+		recursive_print(program, pair.?.right, sb)
 		fmt.sbprint(sb, ")")
-		return
 	case .DUP:
 		pair := program.nodes[port.data.(Node_Address)]
 		fmt.sbprint(sb, "DUP(")
-		recursive_define(program, pair.?.left, sb)
+		recursive_print(program, pair.?.left, sb)
 		fmt.sbprint(sb, ", ")
-		recursive_define(program, pair.?.right, sb)
+		recursive_print(program, pair.?.right, sb)
 		fmt.sbprint(sb, ")")
-		return
+	case .NUM:
+		type := port.data.(Num_Address) & 0x0003
+		addr := (port.data.(Num_Address) >> 2) & 0x3FFF
+		value := program.nums[addr]
+		switch type {
+		case 0:
+			// Uint
+			fmt.sbprintf(sb, "%v", transmute(u32)value)
+		case 1:
+			// Int
+			fmt.sbprintf(sb, "%v", transmute(i32)value)
+		case 2:
+			// Float
+			fmt.sbprintf(sb, "%v", transmute(f32)value)
+		}
 	}
 }
 
@@ -324,16 +338,20 @@ call :: proc(program: ^Program, redex: Pair) {
 
 	def := (cast(^Context)context.user_ptr).book.defs[addr]
 
-	offset_vars := len(program.vars)
-	offset_node := len(program.nodes)
-	adjust_addr := proc(port: Port, offset_vars, offset_node: int) -> Port {
+
+	offsets := [?]int{len(program.vars), len(program.nodes), len(program.nums)}
+	adjust_addr := proc(port: Port, offsets: [3]int) -> Port {
 		port := port
 
 		#partial switch port.tag {
-		case .CON, .DUP:
-			port.data = Node_Address(offset_node + int(port.data.(Node_Address)))
 		case .VAR:
-			port.data = Var_Address(offset_vars + int(port.data.(Var_Address)))
+			port.data = Var_Address(offsets[0] + int(port.data.(Var_Address)))
+		case .CON, .DUP:
+			port.data = Node_Address(offsets[1] + int(port.data.(Node_Address)))
+		case .NUM:
+			type: u32 = u32(port.data.(Num_Address)) & 0x0003
+			addr: u32 = (u32(port.data.(Num_Address)) >> 2) & 0x3FFF
+			port.data = Num_Address(((u32(offsets[2]) + addr) << 2) | type)
 		}
 
 		return port
@@ -351,8 +369,8 @@ call :: proc(program: ^Program, redex: Pair) {
 		right := node.right
 
 
-		left = adjust_addr(left, offset_vars, offset_node)
-		right = adjust_addr(right, offset_vars, offset_node)
+		left = adjust_addr(left, offsets)
+		right = adjust_addr(right, offsets)
 
 		for i := 0; i < len(program.nodes); i += 1 {
 			#partial switch _ in &program.nodes[i] {
@@ -364,15 +382,14 @@ call :: proc(program: ^Program, redex: Pair) {
 	}
 
 	for pair in def.redexes {
-		link(
-			program,
-			{
-				adjust_addr(pair.left, offset_vars, offset_node),
-				adjust_addr(pair.right, offset_vars, offset_node),
-			},
-		)
+		link(program, {adjust_addr(pair.left, offsets), adjust_addr(pair.right, offsets)})
 	}
-	link(program, {adjust_addr(def.root, offset_vars, offset_node), b})
+
+	for num in def.numbers {
+		append(&program.nums, num)
+	}
+
+	link(program, {adjust_addr(def.root, offsets), b})
 }
 
 @(private = "file", init)

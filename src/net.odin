@@ -2,6 +2,15 @@ package main
 
 import "core:fmt"
 
+Term_Kind :: enum {
+	VAR,
+	ERA,
+	REF,
+	CON,
+	DUP,
+	NUM,
+}
+
 Port :: struct {
 	tag:  Term_Kind,
 	data: union {
@@ -9,12 +18,14 @@ Port :: struct {
 		Node_Address, // CON DUP
 		Var_Address, // VAR
 		Ref_Address, // REF
+		Num_Address, // NUM
 	},
 }
 
 Node_Address :: distinct u32
 Ref_Address :: distinct u32
 Var_Address :: distinct u32
+Num_Address :: distinct u32
 Empty :: struct {}
 
 Pair :: struct {
@@ -49,7 +60,7 @@ fmt_port :: proc() {
 					} else {
 						fmt.wprintf(fi.writer, ":%5d", data)
 					}
-				case Node_Address:
+				case Node_Address, Num_Address:
 					fmt.wprintf(fi.writer, ":%5d", data)
 				}
 			case 'd':
@@ -58,7 +69,7 @@ fmt_port :: proc() {
 				switch data in m.data {
 				case Empty:
 					fmt.wprint(fi.writer, "      ")
-				case Var_Address, Ref_Address, Node_Address:
+				case Var_Address, Ref_Address, Node_Address, Num_Address:
 					fmt.wprintf(fi.writer, ":%5d", data)
 				}
 			case:

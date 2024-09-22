@@ -1,6 +1,7 @@
 package main
 
 import "core:fmt"
+import "core:strconv"
 import "core:testing"
 
 Parser :: struct {
@@ -37,10 +38,6 @@ delete_term :: proc(term: ^Term) {
 	free(term)
 }
 
-// parse abuses or_return but doesn't track errors well (ie, fails cause no tilde, no info why/where)
-// https://github.com/odin-lang/Odin/blob/v0.13.0/core/encoding/json/parser.odin
-// odin json parser creates its own tokenizer where this one expects a list of tokens...
-// not sure which is better
 parse :: proc(p: ^Parser) -> (definitions: map[string]Definition, ok: bool = true) {
 	for !is_at_end(p) {
 		parse_definition(p) or_return
@@ -149,7 +146,6 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 		term.data = Var_Data {
 			name = token.lexeme,
 		}
-
 	case .IDENTIFIER:
 		term.pos = {token.line, token.column}
 
@@ -159,29 +155,8 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 
 			expect(p, .LEFT_PAREN) or_return
 			expect(p, .RIGHT_PAREN) or_return
-		// TODO: both DUP and CON are binary so they do the same checks, should
-		// look into grouping them. Maybe some enum switch?
-		case "DUP":
-			term.kind = .DUP
-
-			expect(p, .LEFT_PAREN) or_return
-
-			left := parse_term(p) or_return
-			defer if !ok do delete_term(left)
-
-			expect(p, .COMMA) or_return
-
-			right := parse_term(p) or_return
-			defer if !ok do delete_term(right)
-
-			expect(p, .RIGHT_PAREN) or_return
-
-			term.data = Node_Data {
-				left  = left,
-				right = right,
-			}
-		case "CON":
-			term.kind = .CON
+		case "DUP", "CON":
+			term.kind = .DUP if token.lexeme == "DUP" else .CON
 
 			expect(p, .LEFT_PAREN) or_return
 
@@ -200,20 +175,33 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 				right = right,
 			}
 		case:
-			term.pos = {token.line, token.column}
 			term.kind = .VAR
 			term.data = Var_Data {
 				name = token.lexeme,
 			}
 		}
+	case .NUMBER:
+		term.pos = {token.line, token.column}
 
+		term.kind = .NUM
+
+		if value, is_uint := strconv.parse_uint(token.lexeme, 10); is_uint {
+			term.data = Num_Data{.Uint, cast(u32)value}
+		} else if value, is_int := strconv.parse_int(token.lexeme, 10); is_int {
+			term.data = Num_Data{.Int, cast(i32)value}
+		} else if value, is_float := strconv.parse_f32(token.lexeme); is_float {
+			term.data = Num_Data{.Float, value}
+		} else {
+			error(p, {token.line, token.column}, "number is not parsable: `%s`", token.lexeme)
+		}
 	case:
 		error(
 			p,
 			{token.line, token.column},
-			"expected token to %v or %v, got %v",
+			"expected token to %v, %v, or %v, got %v",
 			Token_Type.IDENTIFIER,
 			Token_Type.SYMBOL,
+			Token_Type.NUMBER,
 			token.type,
 		)
 	}

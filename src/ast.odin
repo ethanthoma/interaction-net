@@ -1,18 +1,11 @@
 package main
 
-Term_Kind :: enum {
-	VAR,
-	ERA,
-	REF,
-	CON,
-	DUP,
-}
-
 Term :: struct {
 	kind: Term_Kind,
 	data: union {
 		Var_Data,
 		Node_Data,
+		Num_Data,
 	},
 	pos:  struct {
 		line:   int,
@@ -27,6 +20,21 @@ Var_Data :: struct {
 Node_Data :: struct {
 	left:  ^Term,
 	right: ^Term,
+}
+
+Num_Data :: struct {
+	dtype: Data_Type,
+	value: union {
+		u32,
+		i32,
+		f32,
+	},
+}
+
+Data_Type :: enum {
+	Uint,
+	Int,
+	Float,
 }
 
 Redex :: struct {

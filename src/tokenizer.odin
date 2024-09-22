@@ -65,6 +65,8 @@ scan :: proc(t: ^Tokenizer) -> (ok: bool = true) {
 		add_token(t, .TILDE)
 	case '@':
 		add_token(t, .SYMBOL)
+	case '0' ..= '9':
+		scan_number(t)
 	case 'A' ..= 'Z', 'a' ..= 'z':
 		scan_identifier(t)
 	case:
@@ -128,6 +130,23 @@ add_token :: proc(t: ^Tokenizer, type: Token_Type) {
 }
 
 @(private = "file")
+scan_number :: proc(t: ^Tokenizer) {
+	has_dot := false
+	for c, ok := peek(t); ok && (is_numeric(c) || c == '.'); c, ok = peek(t) {
+		if has_dot && c == '.' {
+			error(t, "only one period allowed in a number")
+		}
+		advance_rune(t)
+	}
+	add_token(t, .NUMBER)
+}
+
+@(private = "file")
+is_numeric :: proc(c: rune) -> bool {
+	return c >= '0' && c <= '9'
+}
+
+@(private = "file")
 scan_identifier :: proc(t: ^Tokenizer) {
 	for c, ok := peek(t); ok && is_alphanumeric(c); c, ok = peek(t) {
 		advance_rune(t)
@@ -137,7 +156,7 @@ scan_identifier :: proc(t: ^Tokenizer) {
 
 @(private = "file")
 is_alphanumeric :: proc(c: rune) -> bool {
-	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || (c >= '0' && c <= '9')
+	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_' || is_numeric(c)
 }
 
 @(private = "file")

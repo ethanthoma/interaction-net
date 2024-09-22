@@ -132,5 +132,7 @@ compile :: proc(input: string) -> (book: Book, ok: bool = true) {
 
 	generate(&book, definitions)
 
+	fmt.println(book)
+
 	return book, true
 }

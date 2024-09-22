@@ -2,11 +2,13 @@ package main
 
 import "base:runtime"
 import "core:fmt"
+import "core:strconv"
 import "core:strings"
 
 Def :: struct {
 	nodes:   [dynamic]Pair,
 	redexes: [dynamic]Pair,
+	numbers: [dynamic]u32,
 	root:    Port,
 	vars:    int,
 }
@@ -22,6 +24,7 @@ Context :: struct {
 	definitions: map[string]Definition,
 	parsed_refs: map[string]bool,
 	vars:        map[string]Var_Address,
+	num_counts:  [3]int,
 }
 
 make_book :: proc() -> Book {
@@ -61,7 +64,11 @@ generate_definition :: proc(book: ^Book, definition: Definition) {
 	assign_at(
 		&book.defs,
 		int(addr),
-		Def{nodes = make([dynamic]Pair), redexes = make([dynamic]Pair)},
+		Def {
+			nodes = make([dynamic]Pair),
+			redexes = make([dynamic]Pair),
+			numbers = make([dynamic]u32),
+		},
 	)
 	assign_at(&book.names, int(addr), definition.name)
 
@@ -101,9 +108,9 @@ add_or_get_ref_addr :: proc(book: ^Book, name: string) -> Ref_Address {
 
 @(private = "file")
 generate_term :: proc(book: ^Book, def: ^Def, term: ^Term) -> (port: Port) {
+	ctx := cast(^Context)context.user_ptr
 	switch term.kind {
 	case .VAR:
-		ctx := cast(^Context)context.user_ptr
 		name := term.data.(Var_Data).name
 		if var_addr, exists := ctx.vars[name]; exists {
 			return {tag = .VAR, data = var_addr}
@@ -136,6 +143,23 @@ generate_term :: proc(book: ^Book, def: ^Def, term: ^Term) -> (port: Port) {
 		port.data = Node_Address(node_index)
 
 		return port
+	case .NUM:
+		dtype := term.data.(Num_Data).dtype
+		offset := ctx.num_counts[dtype]
+		addr := Num_Address(u32(offset << 2) | u32(dtype))
+
+		value: u32
+		switch v in term.data.(Num_Data).value {
+		case u32:
+			value = transmute(u32)v
+		case i32:
+			value = transmute(u32)v
+		case f32:
+			value = transmute(u32)v
+		}
+
+		append(&def.numbers, value)
+		return {tag = .NUM, data = addr}
 	}
 
 	return port
@@ -195,6 +219,12 @@ fmt_def :: proc() {
 						redex.left,
 						redex.right,
 					)
+				}
+
+				fmt.wprintln(fi.writer, "\t\tNums:")
+
+				for number, index in m.numbers {
+					fmt.wprintfln(fi.writer, "\t\t\t%2d:\t%v", index, number)
 				}
 
 				fmt.wprintfln(fi.writer, "\t\tRoot:\t\t%d", m.root)

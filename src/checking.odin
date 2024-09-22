@@ -73,7 +73,7 @@ check_term :: proc(term: ^Term) -> (err: Check_Error) {
 			)
 			return .Non_Linear_Variable
 		}
-	case .ERA:
+	case .ERA, .NUM:
 	case .REF:
 		name := term.data.(Var_Data).name
 		if name not_in ctx.definition_names {
@@ -154,10 +154,14 @@ test_check_non_linear_variable_one :: proc(t: ^testing.T) {
 	tokens, token_ok := tokenize(&tokenizer)
 	testing.expect(t, token_ok, "Tokenizing should succeed")
 
+	fmt.println(tokens)
+
 	parser := make_parser(tokens)
 	defer delete_parser(&parser)
 
 	definitions, parse_ok := parse(&parser)
+
+	fmt.println(definitions)
 
 	testing.expect(t, parse_ok, "Parsing should succeed")
 

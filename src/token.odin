@@ -9,6 +9,7 @@ Token_Type :: enum {
 	EQUALS,
 	AMPERSAND,
 	TILDE,
+	NUMBER,
 	EOF,
 }
 
