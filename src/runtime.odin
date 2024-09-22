@@ -139,11 +139,11 @@ interact :: proc(program: ^Program, redex: Pair) {
 	switch tags {
 	case {.DUP, .CON}:
 		commute(program, redex)
-	case {.CON, .ERA}, {.DUP, .ERA}, {.DUP, .REF}:
+	case {.CON, .ERA}, {.DUP, .ERA}, {.DUP, .REF}, {.CON, .NUM}, {.DUP, .NUM}:
 		erase(program, redex)
 	case {.CON, .CON}, {.DUP, .DUP}:
 		annihilate(program, redex)
-	case {.ERA, .ERA}, {.REF, .REF}, {.REF, .ERA}:
+	case {.ERA, .ERA}, {.REF, .REF}, {.REF, .ERA}, {.NUM, .ERA}, {.NUM, .REF}, {.NUM, .NUM}:
 		void(program, redex)
 	case {.CON, .REF}:
 		call(program, redex)

@@ -6,9 +6,9 @@ Term_Kind :: enum {
 	VAR,
 	ERA,
 	REF,
+	NUM,
 	CON,
 	DUP,
-	NUM,
 }
 
 Port :: struct {
