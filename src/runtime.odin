@@ -168,7 +168,7 @@ interact :: proc(program: ^Program, redex: Pair) {
 	if ctx.accumulated_interactions >= 10_000 {
 		fmt.printfln("Completed %d interactions", ctx.interactions)
 
-		for ctx.accumulated_interactions > 10_000 {
+		for ctx.accumulated_interactions >= 10_000 {
 			ctx.accumulated_interactions -= 10_000
 		}
 	}
