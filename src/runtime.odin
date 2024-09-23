@@ -172,8 +172,6 @@ interact :: proc(program: ^Program, redex: Pair) {
 			ctx.accumulated_interactions -= 10_000
 		}
 	}
-
-	fmt.println(program)
 }
 
 @(private = "file")
@@ -440,11 +438,9 @@ apply :: proc(program: ^Program, redex: Pair) {
 
 @(private = "file")
 cond :: proc(program: ^Program, redex: Pair) {
-	fmt.println("COND")
 	swi, num := redex.left, redex.right
 
 	if swi.tag != .SWI do swi, num = num, swi
-	fmt.println(swi, num)
 
 	addr_swi := swi.data.(Node_Address)
 	pair := program.nodes[addr_swi].(Pair)

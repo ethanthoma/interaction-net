@@ -1,5 +1,6 @@
 package main
 
+import "core:encoding/ansi"
 import "core:fmt"
 import "core:strconv"
 import "core:testing"
@@ -8,10 +9,11 @@ Parser :: struct {
 	tokens:      []Token,
 	current:     int,
 	definitions: map[string]Definition,
+	err_ctx:     Error_Context,
 }
 
 make_parser :: proc(tokens: []Token) -> Parser {
-	return Parser{tokens = tokens, current = 0, definitions = make(map[string]Definition)}
+	return Parser{tokens, 0, make(map[string]Definition), {1, 1, 1}}
 }
 
 delete_parser :: proc(p: ^Parser) {
@@ -53,7 +55,7 @@ is_at_end :: proc(p: ^Parser) -> bool {
 
 @(private = "file")
 parse_definition :: proc(p: ^Parser) -> (ok: bool = true) {
-	expect(p, .SYMBOL) or_return
+	sym := expect(p, .SYMBOL) or_return
 
 	token := expect(p, .IDENTIFIER) or_return
 
@@ -61,7 +63,12 @@ parse_definition :: proc(p: ^Parser) -> (ok: bool = true) {
 
 	name := token.lexeme
 	if name in p.definitions {
-		error(p, {token.line, token.column}, "@%s is already defined", name)
+		error(
+			p,
+			{sym.line, sym.column, len(sym.lexeme) + len(token.lexeme)},
+			"`@%s` is already defined",
+			name,
+		)
 		return false
 	}
 
@@ -96,7 +103,13 @@ parse_definition :: proc(p: ^Parser) -> (ok: bool = true) {
 @(private = "file")
 expect :: proc(p: ^Parser, type: Token_Type) -> (token: Token, ok: bool = true) {
 	defer if !ok {
-		error(p, {token.line, token.column}, "expected token %v, got %v", type, token.type)
+		error(
+			p,
+			{token.line, token.column, len(token.lexeme)},
+			"expected token %v, got %v",
+			type,
+			token.type,
+		)
 	}
 
 	if token, ok = peek(p); token.type == type {
@@ -127,8 +140,8 @@ peek :: proc(p: ^Parser) -> (token: Token, ok: bool = true) {
 @(private = "file")
 parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 	if is_at_end(p) {
-		token := p.tokens[p.current]
-		error(p, {token.line, token.column}, "unexpected EOF")
+		token := p.tokens[p.current - 1]
+		error(p, {token.line, token.column, len(token.lexeme)}, "unexpected EOF")
 		return term, false
 	}
 
@@ -137,9 +150,11 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 
 	#partial switch token, _ := advance_token(p); token.type {
 	case .SYMBOL:
-		term.pos = {token.line, token.column}
+		term.pos = {token.line, token.column, 1}
 
 		token = expect(p, .IDENTIFIER) or_return
+
+		term.pos.len += len(token.lexeme)
 
 		term.kind = .REF
 
@@ -147,7 +162,7 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 			name = token.lexeme,
 		}
 	case .IDENTIFIER:
-		term.pos = {token.line, token.column}
+		term.pos = {token.line, token.column, len(token.lexeme)}
 
 		switch token.lexeme {
 		case "ERA":
@@ -188,7 +203,7 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 			}
 		}
 	case .NUMBER:
-		term.pos = {token.line, token.column}
+		term.pos = {token.line, token.column, len(token.lexeme)}
 
 		term.kind = .NUM
 
@@ -199,28 +214,35 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 		} else if value, is_float := strconv.parse_f32(token.lexeme); is_float {
 			term.data = Num_Data{.Float, value}
 		} else {
-			error(p, {token.line, token.column}, "number is not parsable: `%s`", token.lexeme)
+			error(
+				p,
+				{token.line, token.column, len(token.lexeme)},
+				"number is not parsable: `%s`",
+				token.lexeme,
+			)
+			return term, false
 		}
 	case:
 		error(
 			p,
-			{token.line, token.column},
-			"expected token to %v, %v, or %v, got %v",
+			{token.line, token.column, len(token.lexeme)},
+			"expected token to be %v, %v, or %v, got %v",
 			Token_Type.IDENTIFIER,
 			Token_Type.SYMBOL,
 			Token_Type.NUMBER,
 			token.type,
 		)
+		return term, false
 	}
 
 	return term, true
 }
 
 @(private = "file")
-error :: proc(p: ^Parser, pos: struct {
-		line, column: int,
-	}, msg: string, args: ..any) {
-	fmt.eprintf("Parser: (%d:%d): ", pos.line, pos.column)
+error :: proc(p: ^Parser, err_ctx: Error_Context, msg: string, args: ..any) {
+	p.err_ctx = err_ctx
+	fmt.eprint(ansi.CSI + ansi.FG_RED + ansi.SGR + "Error" + ansi.CSI + ansi.RESET + ansi.SGR)
+	fmt.eprintf(" (%d:%d): ", p.err_ctx.line, p.err_ctx.column)
 	fmt.eprintf(msg, ..args)
 	fmt.eprintf("\n")
 }

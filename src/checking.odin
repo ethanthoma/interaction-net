@@ -1,5 +1,6 @@
 package main
 
+import "core:encoding/ansi"
 import "core:fmt"
 import "core:testing"
 
@@ -13,22 +14,31 @@ Check_Error :: enum {
 @(private = "file")
 Context :: struct {
 	definition_names: map[string]bool,
-	variable_count:   map[string]int,
+	variable_count:   map[string]Variable_Info,
 	def_name:         string,
+	err_ctx:          ^Error_Context,
 }
 
-check :: proc(defs: map[string]Definition) -> (err: Check_Error) {
+@(private = "file")
+Variable_Info :: struct {
+	count:             int,
+	line, column, len: int,
+}
+
+check :: proc(defs: map[string]Definition) -> (err_ctx: Error_Context, err: Check_Error) {
+	err_ctx = {1, 1, 1}
 	ctx := Context {
 		definition_names = make(map[string]bool),
-		variable_count   = make(map[string]int),
+		variable_count   = make(map[string]Variable_Info),
+		err_ctx          = &err_ctx,
 	}
 	defer delete(ctx.definition_names)
 	defer delete(ctx.variable_count)
 	context.user_ptr = &ctx
 
 	if "root" not_in defs {
-		error("no root definition")
-		return .No_Root
+		error("no `@root` definition")
+		return err_ctx, .No_Root
 	}
 
 	for name in defs {
@@ -41,7 +51,7 @@ check :: proc(defs: map[string]Definition) -> (err: Check_Error) {
 		clear(&ctx.variable_count)
 	}
 
-	return .None
+	return err_ctx, .None
 }
 
 @(private = "file")
@@ -64,12 +74,22 @@ check_term :: proc(term: ^Term) -> (err: Check_Error) {
 	switch term.kind {
 	case .VAR:
 		name := term.data.(Var_Data).name
-		ctx.variable_count[name] += 1
-		if ctx.variable_count[name] > 2 {
+
+		info := ctx.variable_count[name]
+		info.count += 1
+		info.line = term.pos.line
+		info.column = term.pos.column
+		info.len = term.pos.len
+		ctx.variable_count[name] = info
+
+		if info.count > 2 {
+			ctx.err_ctx^ = {info.line, info.column, info.len}
+
 			error(
-				"def @%s: variable `%s` referenced more than twice in a definition",
+				"in definition `@%s`, the variable `%s` is referenced more than twice (%d)",
 				ctx.def_name,
 				name,
+				info.count,
 			)
 			return .Non_Linear_Variable
 		}
@@ -77,13 +97,8 @@ check_term :: proc(term: ^Term) -> (err: Check_Error) {
 	case .REF:
 		name := term.data.(Var_Data).name
 		if name not_in ctx.definition_names {
-			error(
-				"def @%s: reference `@%s` is not defined at %d:%d",
-				ctx.def_name,
-				name,
-				term.pos.line,
-				term.pos.column,
-			)
+			ctx.err_ctx^ = {term.pos.line, term.pos.column, term.pos.len}
+			error("in definition `@%s`, the reference `@%s` is not defined", ctx.def_name, name)
 			return .Unbound_Reference
 		}
 	case .CON, .DUP, .OPE, .SWI:
@@ -98,9 +113,15 @@ check_term :: proc(term: ^Term) -> (err: Check_Error) {
 @(private = "file")
 check_linearity :: proc(def: ^Definition) -> (err: Check_Error) {
 	ctx := cast(^Context)context.user_ptr
-	for var, count in ctx.variable_count {
-		if count != 2 {
-			error("@def %s: variable `%s` has %d references, expected 2", def.name, var, count)
+	for var, info in ctx.variable_count {
+		if info.count != 2 {
+			ctx.err_ctx^ = {info.line, info.column, info.len}
+			error(
+				"in definition `@%s`, the variable `%s` has %d references, expected 2",
+				def.name,
+				var,
+				info.count,
+			)
 			return .Non_Linear_Variable
 		}
 	}
@@ -110,9 +131,12 @@ check_linearity :: proc(def: ^Definition) -> (err: Check_Error) {
 
 @(private = "file")
 error :: proc(msg: string, args: ..any) {
-	fmt.eprintf("Check:\n\t")
-	fmt.eprintf("\t%14s\n\t", "asd")
-	fmt.eprintfln(msg, ..args)
+	ctx := cast(^Context)context.user_ptr
+
+	fmt.eprint(ansi.CSI + ansi.FG_RED + ansi.SGR + "Error" + ansi.CSI + ansi.RESET + ansi.SGR)
+	fmt.eprintf(" (%d:%d): ", ctx.err_ctx.line, ctx.err_ctx.column)
+	fmt.eprintf(msg, ..args)
+	fmt.eprintf("\n")
 }
 
 // ** Testing **
@@ -137,7 +161,7 @@ test_check_succeed :: proc(t: ^testing.T) {
 
 	testing.expect(t, parse_ok, "Parsing should succeed")
 
-	err := check(parser.definitions)
+	_, err := check(parser.definitions)
 
 	testing.expectf(t, err == .None, "Expected %v, got %v", Check_Error.None, err)
 }
@@ -165,7 +189,7 @@ test_check_non_linear_variable_one :: proc(t: ^testing.T) {
 
 	testing.expect(t, parse_ok, "Parsing should succeed")
 
-	err := check(parser.definitions)
+	_, err := check(parser.definitions)
 
 	testing.expectf(
 		t,
@@ -196,7 +220,7 @@ test_check_non_linear_variable_three :: proc(t: ^testing.T) {
 
 	testing.expect(t, parse_ok, "Parsing should succeed")
 
-	err := check(parser.definitions)
+	_, err := check(parser.definitions)
 
 	testing.expectf(
 		t,
@@ -226,7 +250,7 @@ test_check_Unbound_Reference :: proc(t: ^testing.T) {
 
 	testing.expect(t, parse_ok, "Parsing should succeed")
 
-	err := check(parser.definitions)
+	_, err := check(parser.definitions)
 
 	testing.expectf(
 		t,

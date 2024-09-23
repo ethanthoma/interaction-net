@@ -1,13 +1,16 @@
 package main
 
+import "core:encoding/ansi"
 import "core:fmt"
 import "core:strings"
 import "core:testing"
 
 Tokenizer :: struct {
-	input:                         string,
-	offset, current, line, column: int,
-	tokens:                        [dynamic]Token,
+	input:           string,
+	offset, current: int,
+	tokens:          [dynamic]Token,
+	lines:           [dynamic]string,
+	err_ctx:         Error_Context,
 }
 
 make_tokenizer :: proc(input: string) -> Tokenizer {
@@ -15,9 +18,8 @@ make_tokenizer :: proc(input: string) -> Tokenizer {
 		input = input,
 		offset = 0,
 		current = 0,
-		line = 1,
-		column = 1,
 		tokens = make([dynamic]Token),
+		err_ctx = {1, 1, 1},
 	}
 }
 
@@ -66,9 +68,9 @@ scan :: proc(t: ^Tokenizer) -> (ok: bool = true) {
 	case '@':
 		add_token(t, .SYMBOL)
 	case '0' ..= '9', '-':
-		scan_number(t)
+		scan_number(t) or_return
 	case 'A' ..= 'Z', 'a' ..= 'z':
-		scan_identifier(t)
+		scan_identifier(t) or_return
 	case:
 		error(t, "illegal character '%r'", c)
 		return false
@@ -85,14 +87,16 @@ skip_whitespace :: proc(t: ^Tokenizer) {
 
 		switch c {
 		case '\n':
-			t.line += 1
-			t.column = 1
 			t.current += 1
 			t.offset += 1
+
+			t.err_ctx.column = 1
+			t.err_ctx.line += 1
 		case ' ', '\t', '\r', '\v', '\f':
 			t.current += 1
-			t.column += 1
 			t.offset += 1
+
+			t.err_ctx.column += 1
 		case:
 			return
 		}
@@ -121,24 +125,29 @@ add_token :: proc(t: ^Tokenizer, type: Token_Type) {
 	token := Token {
 		type   = type,
 		lexeme = text,
-		line   = t.line,
-		column = t.column,
+		line   = t.err_ctx.line,
+		column = t.err_ctx.column,
 	}
-	t.column += len(text)
+
+	t.err_ctx.column += len(text)
 	t.offset = t.current
 	append(&t.tokens, token)
 }
 
 @(private = "file")
-scan_number :: proc(t: ^Tokenizer) {
+scan_number :: proc(t: ^Tokenizer) -> (ok: bool = true) {
 	has_dot := false
 	for c, ok := peek(t); ok && (is_numeric(c) || c == '.'); c, ok = peek(t) {
+		advance_rune(t)
+
 		if has_dot && c == '.' {
 			error(t, "only one period allowed in a number")
+			return false
 		}
-		advance_rune(t)
+		has_dot |= c == '.'
 	}
 	add_token(t, .NUMBER)
+	return true
 }
 
 @(private = "file")
@@ -147,11 +156,12 @@ is_numeric :: proc(c: rune) -> bool {
 }
 
 @(private = "file")
-scan_identifier :: proc(t: ^Tokenizer) {
+scan_identifier :: proc(t: ^Tokenizer) -> (ok: bool = true) {
 	for c, ok := peek(t); ok && is_alphanumeric(c); c, ok = peek(t) {
 		advance_rune(t)
 	}
 	add_token(t, .IDENTIFIER)
+	return true
 }
 
 @(private = "file")
@@ -161,7 +171,9 @@ is_alphanumeric :: proc(c: rune) -> bool {
 
 @(private = "file")
 error :: proc(t: ^Tokenizer, msg: string, args: ..any) {
-	fmt.eprintf("Tokenizer: (%d:%d): ", t.line, t.column)
+	t.err_ctx.len = t.current - (t.err_ctx.column - 1)
+	fmt.eprint(ansi.CSI + ansi.FG_RED + ansi.SGR + "Error" + ansi.CSI + ansi.RESET + ansi.SGR)
+	fmt.eprintf(" (%d:%d): ", t.err_ctx.line, t.err_ctx.column)
 	fmt.eprintf(msg, ..args)
 	fmt.eprintf("\n")
 }

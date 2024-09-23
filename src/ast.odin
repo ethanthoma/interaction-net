@@ -10,6 +10,7 @@ Term :: struct {
 	pos:  struct {
 		line:   int,
 		column: int,
+		len:    int,
 	},
 }
 
