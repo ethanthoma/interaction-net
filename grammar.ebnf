@@ -4,15 +4,17 @@ alpha = lower case alpha | upper case alpha
 numeric = "0" | ... | "9"
 
 (* Lexical elements *)
-identifier = alpha, { alpha | numeric }
+identifier = alpha, { alpha | numeric | "_" }
 
 (* Terms *)
-term = era_term | con_term | dup_term | var_term | ref_term
+term = era_term | con_term | dup_term | swi_term | var_term | ref_term | num_term
 era_term = "ERA", "(", ")"
 con_term = "CON", "(", term, ",", term, ")"
 dup_term = "DUP", "(", term, ",", term, ")"
+swi_term = "SWI", "(", term, ",", term, ")"
 var_term = identifier
 ref_term = "@", identifier
+num_term = [ "-" ], numeric, { numeric }, [ ".", { numeric } ]
 
 (* Redex *)
 redex = term, "~", term
