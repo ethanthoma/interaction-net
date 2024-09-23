@@ -155,8 +155,15 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 
 			expect(p, .LEFT_PAREN) or_return
 			expect(p, .RIGHT_PAREN) or_return
-		case "DUP", "CON":
-			term.kind = .DUP if token.lexeme == "DUP" else .CON
+		case "DUP", "CON", "SWI":
+			switch token.lexeme {
+			case "DUP":
+				term.kind = .DUP
+			case "CON":
+				term.kind = .CON
+			case "SWI":
+				term.kind = .SWI
+			}
 
 			expect(p, .LEFT_PAREN) or_return
 

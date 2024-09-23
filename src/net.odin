@@ -9,13 +9,15 @@ Term_Kind :: enum {
 	NUM,
 	CON,
 	DUP,
+	OPE,
+	SWI,
 }
 
 Port :: struct {
 	tag:  Term_Kind,
 	data: union {
 		Empty, // ERA
-		Node_Address, // CON DUP
+		Node_Address, // CON DUP OPE SWI
 		Var_Address, // VAR
 		Ref_Address, // REF
 		Num_Address, // NUM
@@ -26,6 +28,23 @@ Node_Address :: distinct u32
 Ref_Address :: distinct u32
 Var_Address :: distinct u32
 Num_Address :: distinct u32
+// 4 bits
+Ope_Type :: enum {
+	Add,
+	Sub,
+	Mul,
+	Div,
+	Rem,
+	Eq,
+	Neq,
+	Lt,
+	Gt,
+	And,
+	Or,
+	Xor,
+	Shr,
+	Shl,
+}
 Empty :: struct {}
 
 Pair :: struct {
@@ -60,8 +79,11 @@ fmt_port :: proc() {
 					} else {
 						fmt.wprintf(fi.writer, ":%5d", data)
 					}
-				case Node_Address, Num_Address:
+				case Node_Address:
 					fmt.wprintf(fi.writer, ":%5d", data)
+				case Num_Address:
+					addr := (data >> 2) & 0x3FFF
+					fmt.wprintf(fi.writer, ":%5d", addr)
 				}
 			case 'd':
 				fmt.wprintf(fi.writer, "%v", m.tag)
@@ -69,8 +91,11 @@ fmt_port :: proc() {
 				switch data in m.data {
 				case Empty:
 					fmt.wprint(fi.writer, "      ")
-				case Var_Address, Ref_Address, Node_Address, Num_Address:
+				case Var_Address, Ref_Address, Node_Address:
 					fmt.wprintf(fi.writer, ":%5d", data)
+				case Num_Address:
+					addr := (data >> 2) & 0x3FFF
+					fmt.wprintf(fi.writer, ":%5d", addr)
 				}
 			case:
 				return false

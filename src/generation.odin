@@ -83,6 +83,7 @@ generate_definition :: proc(book: ^Book, definition: Definition) {
 	}
 
 	ctx := cast(^Context)context.user_ptr
+	ctx.num_counts = [?]int{0, 0, 0}
 
 	def.vars = len(ctx.vars)
 
@@ -126,7 +127,7 @@ generate_term :: proc(book: ^Book, def: ^Def, term: ^Term) -> (port: Port) {
 		addr := add_or_get_ref_addr(book, name)
 
 		return {tag = .REF, data = addr}
-	case .CON, .DUP:
+	case .CON, .DUP, .OPE, .SWI:
 		port = Port {
 			tag = term.kind,
 		}
@@ -159,6 +160,7 @@ generate_term :: proc(book: ^Book, def: ^Def, term: ^Term) -> (port: Port) {
 		}
 
 		append(&def.numbers, value)
+		ctx.num_counts[dtype] += 1
 		return {tag = .NUM, data = addr}
 	}
 

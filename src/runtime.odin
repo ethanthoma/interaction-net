@@ -19,12 +19,13 @@ Program :: struct {
 
 @(private = "file")
 Context :: struct {
-	book:         ^Book,
-	interactions: int,
+	book:                     ^Book,
+	interactions:             int,
+	accumulated_interactions: int,
 }
 
 run :: proc(book: ^Book) {
-	ctx := Context{book, 0}
+	ctx := Context{book, 0, 0}
 	context.user_ptr = &ctx
 
 	program: Program = {
@@ -80,7 +81,7 @@ delete_result :: proc(result: string) {
 
 @(private = "file")
 recursive_print :: proc(program: ^Program, port: Port, sb: ^strings.Builder) {
-	switch port.tag {
+	#partial switch port.tag {
 	case .ERA:
 		fmt.sbprint(sb, "ERA()")
 	case .REF:
@@ -93,20 +94,6 @@ recursive_print :: proc(program: ^Program, port: Port, sb: ^strings.Builder) {
 		} else {
 			fmt.sbprintf(sb, "v%d", port.data.(Var_Address))
 		}
-	case .CON:
-		pair := program.nodes[port.data.(Node_Address)]
-		fmt.sbprint(sb, "CON(")
-		recursive_print(program, pair.?.left, sb)
-		fmt.sbprint(sb, ", ")
-		recursive_print(program, pair.?.right, sb)
-		fmt.sbprint(sb, ")")
-	case .DUP:
-		pair := program.nodes[port.data.(Node_Address)]
-		fmt.sbprint(sb, "DUP(")
-		recursive_print(program, pair.?.left, sb)
-		fmt.sbprint(sb, ", ")
-		recursive_print(program, pair.?.right, sb)
-		fmt.sbprint(sb, ")")
 	case .NUM:
 		type := port.data.(Num_Address) & 0x0003
 		addr := (port.data.(Num_Address) >> 2) & 0x3FFF
@@ -122,6 +109,22 @@ recursive_print :: proc(program: ^Program, port: Port, sb: ^strings.Builder) {
 			// Float
 			fmt.sbprintf(sb, "%v", transmute(f32)value)
 		}
+	case:
+		#partial switch port.tag {
+		case .CON:
+			fmt.sbprint(sb, "CON(")
+		case .DUP:
+			fmt.sbprint(sb, "DUP(")
+		case .OPE:
+			fmt.sbprint(sb, "OPE(")
+		case .SWI:
+			fmt.sbprint(sb, "SWI(")
+		}
+		pair := program.nodes[port.data.(Node_Address)]
+		recursive_print(program, pair.?.left, sb)
+		fmt.sbprint(sb, ", ")
+		recursive_print(program, pair.?.right, sb)
+		fmt.sbprint(sb, ")")
 	}
 }
 
@@ -137,16 +140,20 @@ interact :: proc(program: ^Program, redex: Pair) {
 		tag_b: Term_Kind,
 	}({a.tag, b.tag})
 	switch tags {
-	case {.DUP, .CON}:
+	case {.DUP, .CON}, {.SWI, .DUP}:
 		commute(program, redex)
-	case {.CON, .ERA}, {.DUP, .ERA}, {.DUP, .REF}, {.CON, .NUM}, {.DUP, .NUM}:
+	case {.CON, .ERA}, {.DUP, .ERA}, {.DUP, .REF}, {.CON, .NUM}, {.DUP, .NUM}, {.SWI, .ERA}:
 		erase(program, redex)
-	case {.CON, .CON}, {.DUP, .DUP}:
+	case {.CON, .CON}, {.DUP, .DUP}, {.SWI, .SWI}:
 		annihilate(program, redex)
 	case {.ERA, .ERA}, {.REF, .REF}, {.REF, .ERA}, {.NUM, .ERA}, {.NUM, .REF}, {.NUM, .NUM}:
 		void(program, redex)
-	case {.CON, .REF}:
+	case {.CON, .REF}, {.SWI, .REF}:
 		call(program, redex)
+	case {.SWI, .CON}:
+		apply(program, redex)
+	case {.SWI, .NUM}:
+		cond(program, redex)
 	case:
 		if a.tag == .REF && b == {.VAR, ROOT} do call(program, redex)
 		else if a.tag == .VAR || b.tag == .VAR {
@@ -156,12 +163,23 @@ interact :: proc(program: ^Program, redex: Pair) {
 	}
 
 	ctx.interactions += 1
+	ctx.accumulated_interactions += 1
+
+	if ctx.accumulated_interactions >= 10_000 {
+		fmt.printfln("Completed %d interactions", ctx.interactions)
+
+		for ctx.accumulated_interactions > 10_000 {
+			ctx.accumulated_interactions -= 10_000
+		}
+	}
+
+	fmt.println(program)
 }
 
 @(private = "file")
 commute :: proc(program: ^Program, redex: Pair) {
 	con, dup := redex.left, redex.right
-	if con.tag == .DUP {
+	if dup.tag == .CON {
 		con, dup = dup, con
 	}
 
@@ -176,10 +194,10 @@ commute :: proc(program: ^Program, redex: Pair) {
 	x3 := create_var(program)
 	x4 := create_var(program)
 
-	node_1 := create_node(program, .CON, x1, x2)
-	node_2 := create_node(program, .CON, x3, x4)
-	node_3 := create_node(program, .DUP, x1, x3)
-	node_4 := create_node(program, .DUP, x2, x4)
+	node_1 := create_node(program, con.tag, {{.VAR, x1}, {.VAR, x2}})
+	node_2 := create_node(program, con.tag, {{.VAR, x3}, {.VAR, x4}})
+	node_3 := create_node(program, dup.tag, {{.VAR, x1}, {.VAR, x3}})
+	node_4 := create_node(program, dup.tag, {{.VAR, x2}, {.VAR, x4}})
 
 	link(program, {node_1, dup_node.left})
 	link(program, {node_2, dup_node.right})
@@ -198,17 +216,15 @@ create_var :: proc(program: ^Program) -> Var_Address {
 }
 
 @(private = "file")
-create_node :: proc(program: ^Program, kind: Term_Kind, var_left, var_right: Var_Address) -> Port {
-	left := Port{.VAR, var_left}
-	right := Port{.VAR, var_right}
+create_node :: proc(program: ^Program, kind: Term_Kind, pair: Pair) -> Port {
 	for i := 0; i < len(program.nodes); i += 1 {
 		#partial switch _ in &program.nodes[i] {
 		case nil:
-			program.nodes[i] = Pair{left, right}
+			program.nodes[i] = pair
 			return Port{tag = kind, data = Node_Address(i)}
 		}
 	}
-	append(&program.nodes, Pair{left, right})
+	append(&program.nodes, pair)
 	return Port{tag = kind, data = Node_Address(len(program.nodes) - 1)}
 }
 
@@ -222,7 +238,7 @@ erase :: proc(program: ^Program, redex: Pair) {
 	a, b := redex.left, redex.right
 
 	#partial switch a.tag {
-	case .CON, .DUP:
+	case .CON, .DUP, .SWI:
 		a, b = b, a
 	}
 
@@ -251,7 +267,7 @@ annihilate :: proc(program: ^Program, redex: Pair) {
 	case .CON:
 		link(program, {node_a.left, node_b.right})
 		link(program, {node_a.right, node_b.left})
-	case .DUP:
+	case .DUP, .SWI:
 		link(program, {node_a.left, node_b.left})
 		link(program, {node_a.right, node_b.right})
 	}
@@ -343,15 +359,16 @@ call :: proc(program: ^Program, redex: Pair) {
 	adjust_addr := proc(port: Port, offsets: [3]int) -> Port {
 		port := port
 
-		#partial switch port.tag {
+		switch port.tag {
 		case .VAR:
 			port.data = Var_Address(offsets[0] + int(port.data.(Var_Address)))
-		case .CON, .DUP:
+		case .CON, .DUP, .SWI, .OPE:
 			port.data = Node_Address(offsets[1] + int(port.data.(Node_Address)))
 		case .NUM:
 			type: u32 = u32(port.data.(Num_Address)) & 0x0003
 			addr: u32 = (u32(port.data.(Num_Address)) >> 2) & 0x3FFF
 			port.data = Num_Address(((u32(offsets[2]) + addr) << 2) | type)
+		case .ERA, .REF:
 		}
 
 		return port
@@ -385,11 +402,84 @@ call :: proc(program: ^Program, redex: Pair) {
 		link(program, {adjust_addr(pair.left, offsets), adjust_addr(pair.right, offsets)})
 	}
 
+	link(program, {adjust_addr(def.root, offsets), b})
+
 	for num in def.numbers {
 		append(&program.nums, num)
 	}
+}
 
-	link(program, {adjust_addr(def.root, offsets), b})
+@(private = "file")
+apply :: proc(program: ^Program, redex: Pair) {
+	swi, con := redex.left, redex.right
+
+	addr_swi := swi.data.(Node_Address)
+	addr_con := con.data.(Node_Address)
+
+	pair_swi := program.nodes[addr_swi].(Pair)
+	pair_con := program.nodes[addr_con].(Pair)
+
+	x1 := create_var(program)
+	x2 := create_var(program)
+	x3 := create_var(program)
+	x4 := create_var(program)
+
+	node_dup := create_node(program, .DUP, {{.VAR, x1}, {.VAR, x2}})
+	node_con := create_node(program, .CON, {{.VAR, x3}, {.VAR, x4}})
+	node_swi1 := create_node(program, .SWI, {{.VAR, x1}, {.VAR, x3}})
+	node_swi2 := create_node(program, .SWI, {{.VAR, x2}, {.VAR, x4}})
+
+	link(program, {node_dup, pair_con.left})
+	link(program, {node_con, pair_con.right})
+	link(program, {node_swi1, pair_swi.left})
+	link(program, {node_swi2, pair_swi.right})
+
+	delete_node(program, addr_swi)
+	delete_node(program, addr_con)
+}
+
+@(private = "file")
+cond :: proc(program: ^Program, redex: Pair) {
+	fmt.println("COND")
+	swi, num := redex.left, redex.right
+
+	if swi.tag != .SWI do swi, num = num, swi
+	fmt.println(swi, num)
+
+	addr_swi := swi.data.(Node_Address)
+	pair := program.nodes[addr_swi].(Pair)
+
+	type := num.data.(Num_Address) & 0x0003
+	addr_num := (num.data.(Num_Address) >> 2) & 0x3FFF
+	is_zero: bool
+	value := program.nums[addr_num]
+	switch type {
+	case 0:
+		is_zero = transmute(u32)value == 0
+		value = transmute(u32)((transmute(u32)value) - 1)
+	case 1:
+		is_zero = transmute(i32)value == 0
+		value = transmute(u32)((transmute(i32)value) - 1)
+	case 2:
+		is_zero = transmute(f32)value == 0
+		value = transmute(u32)((transmute(f32)value) - 1)
+	}
+
+	if is_zero {
+		node_con := create_node(program, .CON, {pair.right, {.ERA, Empty{}}})
+
+		link(program, {pair.left, node_con})
+	} else {
+		addr := u32(len(program.nums))
+		append(&program.nums, value)
+
+		new_addr := (addr << 2) | u32(type)
+
+		node_con1 := create_node(program, .CON, {{.NUM, Num_Address(new_addr)}, pair.right})
+		node_con2 := create_node(program, .CON, {{.ERA, Empty{}}, node_con1})
+
+		link(program, {pair.left, node_con2})
+	}
 }
 
 @(private = "file", init)
@@ -440,6 +530,12 @@ fmt_program :: proc() {
 						}
 						fmt.wprintfln(fi.writer, "%v", var)
 					}
+				}
+
+				fmt.wprintfln(fi.writer, "\tNums:")
+
+				for num, index in m.nums {
+					fmt.wprintfln(fi.writer, "\t\t%4d:\t%v", index, num)
 				}
 
 				fmt.wprintf(fi.writer, "}}")

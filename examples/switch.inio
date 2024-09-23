@@ -1,0 +1,5 @@
+@root = CON(a, b) 
+    & @five_or_three ~ CON(0, a)
+    & @five_or_three ~ CON(1, b)
+
+@five_or_three = SWI(DUP(CON(5, 3), a), a)

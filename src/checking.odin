@@ -67,7 +67,7 @@ check_term :: proc(term: ^Term) -> (err: Check_Error) {
 		ctx.variable_count[name] += 1
 		if ctx.variable_count[name] > 2 {
 			error(
-				"def @%s: variable %s referenced more than twice in a definition",
+				"def @%s: variable `%s` referenced more than twice in a definition",
 				ctx.def_name,
 				name,
 			)
@@ -78,7 +78,7 @@ check_term :: proc(term: ^Term) -> (err: Check_Error) {
 		name := term.data.(Var_Data).name
 		if name not_in ctx.definition_names {
 			error(
-				"def @%s: reference @%s is not defined at %d:%d",
+				"def @%s: reference `@%s` is not defined at %d:%d",
 				ctx.def_name,
 				name,
 				term.pos.line,
@@ -86,7 +86,7 @@ check_term :: proc(term: ^Term) -> (err: Check_Error) {
 			)
 			return .Unbound_Reference
 		}
-	case .CON, .DUP:
+	case .CON, .DUP, .OPE, .SWI:
 		node_data := term.data.(Node_Data)
 		check_term(node_data.left) or_return
 		check_term(node_data.right) or_return
@@ -100,7 +100,7 @@ check_linearity :: proc(def: ^Definition) -> (err: Check_Error) {
 	ctx := cast(^Context)context.user_ptr
 	for var, count in ctx.variable_count {
 		if count != 2 {
-			error("@def %s: variable %s has %d references, expected 2", def.name, var, count)
+			error("@def %s: variable `%s` has %d references, expected 2", def.name, var, count)
 			return .Non_Linear_Variable
 		}
 	}
@@ -110,9 +110,9 @@ check_linearity :: proc(def: ^Definition) -> (err: Check_Error) {
 
 @(private = "file")
 error :: proc(msg: string, args: ..any) {
-	fmt.eprintf("Check: ")
-	fmt.eprintf(msg, ..args)
-	fmt.eprintf("\n")
+	fmt.eprintf("Check:\n\t")
+	fmt.eprintf("\t%14s\n\t", "asd")
+	fmt.eprintfln(msg, ..args)
 }
 
 // ** Testing **

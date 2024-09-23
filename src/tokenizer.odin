@@ -65,7 +65,7 @@ scan :: proc(t: ^Tokenizer) -> (ok: bool = true) {
 		add_token(t, .TILDE)
 	case '@':
 		add_token(t, .SYMBOL)
-	case '0' ..= '9':
+	case '0' ..= '9', '-':
 		scan_number(t)
 	case 'A' ..= 'Z', 'a' ..= 'z':
 		scan_identifier(t)
