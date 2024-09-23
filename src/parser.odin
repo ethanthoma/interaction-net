@@ -248,8 +248,6 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 		expect(p, .RIGHT_PAREN) or_return
 
 		term.data = Op_Data{type, {left, right}}
-
-		fmt.println(term)
 	case:
 		error(
 			p,

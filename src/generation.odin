@@ -173,8 +173,6 @@ generate_term :: proc(book: ^Book, def: ^Def, term: ^Term) -> (port: Port) {
 		type := u32(term.data.(Op_Data).optype)
 		addr := (u32(len(def.nodes)) << 4) | type
 
-		fmt.printfln("%b, %x, %x", type, len(def.nodes), addr)
-
 		append(&def.nodes, pair)
 
 		port.data = Node_Address(addr)

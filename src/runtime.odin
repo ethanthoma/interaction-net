@@ -478,8 +478,8 @@ cond :: proc(program: ^Program, redex: Pair) {
 
 		link(program, {pair.left, node_con})
 	} else {
-		addr_new_num := Num_Address((u32(len(program.nums)) << 2) | u32(result_type))
-		append(&program.nums, result)
+		addr_new_num := Num_Address((u32(len(program.nums)) << 2) | u32(type))
+		append(&program.nums, value)
 
 		node_con1 := create_node(program, .CON, {{.NUM, addr_new_num}, pair.right})
 		node_con2 := create_node(program, .CON, {{.ERA, Empty{}}, node_con1})
