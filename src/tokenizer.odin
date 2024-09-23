@@ -62,19 +62,44 @@ scan :: proc(t: ^Tokenizer) -> (ok: bool = true) {
 	case '=':
 		add_token(t, .EQUALS)
 	case '&':
-		add_token(t, .AMPERSAND)
+		if match(t, '(') {
+			add_token(t, .OPERATION)
+		} else {
+			add_token(t, .AMPERSAND)
+		}
 	case '~':
 		add_token(t, .TILDE)
 	case '@':
 		add_token(t, .SYMBOL)
-	case '0' ..= '9', '-':
+	case '+', '/', '*', '%', '!', '|', '^':
+		add_token(t, .OPERATION)
+	case '0' ..= '9':
 		scan_number(t) or_return
 	case 'A' ..= 'Z', 'a' ..= 'z':
 		scan_identifier(t) or_return
+	case '-':
+		if match(t, '(') {
+			add_token(t, .OPERATION)
+		} else {
+			scan_number(t) or_return
+		}
+	case '>', '<':
+		if match(t, c) { 	// shifting
+			t.current += 1
+		}
+		add_token(t, .OPERATION)
 	case:
 		error(t, "illegal character '%r'", c)
 		return false
 	}
+
+	return true
+}
+
+@(private = "file")
+match :: proc(t: ^Tokenizer, expected: rune) -> (ok: bool = true) {
+	if is_at_end(t) do return false
+	if rune(t.input[t.current]) != expected do return false
 
 	return true
 }

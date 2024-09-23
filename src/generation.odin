@@ -24,7 +24,6 @@ Context :: struct {
 	definitions: map[string]Definition,
 	parsed_refs: map[string]bool,
 	vars:        map[string]Var_Address,
-	num_counts:  [3]int,
 }
 
 make_book :: proc() -> Book {
@@ -83,7 +82,6 @@ generate_definition :: proc(book: ^Book, definition: Definition) {
 	}
 
 	ctx := cast(^Context)context.user_ptr
-	ctx.num_counts = [?]int{0, 0, 0}
 
 	def.vars = len(ctx.vars)
 
@@ -127,7 +125,7 @@ generate_term :: proc(book: ^Book, def: ^Def, term: ^Term) -> (port: Port) {
 		addr := add_or_get_ref_addr(book, name)
 
 		return {tag = .REF, data = addr}
-	case .CON, .DUP, .OPE, .SWI:
+	case .CON, .DUP, .SWI:
 		port = Port {
 			tag = term.kind,
 		}
@@ -145,9 +143,9 @@ generate_term :: proc(book: ^Book, def: ^Def, term: ^Term) -> (port: Port) {
 
 		return port
 	case .NUM:
-		dtype := term.data.(Num_Data).dtype
-		offset := ctx.num_counts[dtype]
-		addr := Num_Address(u32(offset << 2) | u32(dtype))
+		dtype := u32(term.data.(Num_Data).dtype)
+		offset := u32(len(def.numbers))
+		addr := Num_Address(u32(len(def.numbers) << 2) | dtype)
 
 		value: u32
 		switch v in term.data.(Num_Data).value {
@@ -160,8 +158,28 @@ generate_term :: proc(book: ^Book, def: ^Def, term: ^Term) -> (port: Port) {
 		}
 
 		append(&def.numbers, value)
-		ctx.num_counts[dtype] += 1
 		return {tag = .NUM, data = addr}
+	case .OPE:
+		port = Port {
+			tag = term.kind,
+		}
+
+		node_data := term.data.(Op_Data).node
+		left_port := generate_term(book, def, node_data.left)
+		right_port := generate_term(book, def, node_data.right)
+
+		pair: Pair = {left_port, right_port}
+
+		type := u32(term.data.(Op_Data).optype)
+		addr := (u32(len(def.nodes)) << 4) | type
+
+		fmt.printfln("%b, %x, %x", type, len(def.nodes), addr)
+
+		append(&def.nodes, pair)
+
+		port.data = Node_Address(addr)
+
+		return port
 	}
 
 	return port

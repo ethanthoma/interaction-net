@@ -1,0 +1,16 @@
+@fun = CON(SWI(DUP(@fun__C0, @fun__C1), a), a)
+
+@fun__C0 = a
+    & @loop ~ CON(65536, a)
+
+@fun__C1 = CON(DUP(a, b), d)
+    & @fun ~ CON(a, OPE(+ CON(a, d)))
+    & @fun ~ CON(b, c)
+
+@loop = CON(SWI(DUP(0, @loop_C0), a), a)
+
+@loop__C0 = a
+    & @loop ~ a
+
+@root = a
+    & @fun ~ CON(8, a)

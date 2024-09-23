@@ -102,7 +102,9 @@ check_term :: proc(term: ^Term) -> (err: Check_Error) {
 			return .Unbound_Reference
 		}
 	case .CON, .DUP, .OPE, .SWI:
-		node_data := term.data.(Node_Data)
+		node_data: Node_Data
+		if term.kind == .OPE do node_data = term.data.(Op_Data).node
+		else do node_data = term.data.(Node_Data)
 		check_term(node_data.left) or_return
 		check_term(node_data.right) or_return
 	}

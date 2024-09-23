@@ -54,8 +54,12 @@ run :: proc(book: ^Book) {
 
 	time.stopwatch_stop(&timer)
 
-	result := make_result(&program)
-	defer delete_result(result)
+	sb := strings.builder_make()
+
+	recursive_print(&program, {.VAR, ROOT}, &sb)
+
+	result := strings.to_string(sb)
+	defer delete(result)
 
 	fmt.printfln("Result:\t%v", result)
 	fmt.printfln("Interactions:\t%d", ctx.interactions)
@@ -65,18 +69,6 @@ run :: proc(book: ^Book) {
 		(f64(ctx.interactions) / 1_000_000) /
 		time.duration_seconds(time.stopwatch_duration(timer)),
 	)
-}
-
-make_result :: proc(program: ^Program) -> string {
-	sb := strings.builder_make()
-
-	recursive_print(program, {.VAR, ROOT}, &sb)
-
-	return strings.to_string(sb)
-}
-
-delete_result :: proc(result: string) {
-	delete(result)
 }
 
 @(private = "file")
@@ -95,8 +87,8 @@ recursive_print :: proc(program: ^Program, port: Port, sb: ^strings.Builder) {
 			fmt.sbprintf(sb, "v%d", port.data.(Var_Address))
 		}
 	case .NUM:
-		type := port.data.(Num_Address) & 0x0003
-		addr := (port.data.(Num_Address) >> 2) & 0x3FFF
+		type := port.data.(Num_Address) & 0x00000003
+		addr := (port.data.(Num_Address) >> 2) & 0x3FFFFFFF
 		value := program.nums[addr]
 		switch type {
 		case 0:
@@ -109,14 +101,30 @@ recursive_print :: proc(program: ^Program, port: Port, sb: ^strings.Builder) {
 			// Float
 			fmt.sbprintf(sb, "%v", transmute(f32)value)
 		}
+	case .OPE:
+		type := Op_Type(port.data.(Node_Address) & 0x00000003)
+		addr := (port.data.(Node_Address) >> 4) & 0x3FFFFFFF
+
+		#partial switch type {
+		case .Add:
+			fmt.sbprint(sb, "+(")
+		case .Sub:
+			fmt.sbprint(sb, "-(")
+		case:
+			panic("NOT SUPPORTED OP")
+		}
+
+		pair := program.nodes[addr]
+		recursive_print(program, pair.?.left, sb)
+		fmt.sbprint(sb, ", ")
+		recursive_print(program, pair.?.right, sb)
+		fmt.sbprint(sb, ")")
 	case:
 		#partial switch port.tag {
 		case .CON:
 			fmt.sbprint(sb, "CON(")
 		case .DUP:
 			fmt.sbprint(sb, "DUP(")
-		case .OPE:
-			fmt.sbprint(sb, "OPE(")
 		case .SWI:
 			fmt.sbprint(sb, "SWI(")
 		}
@@ -154,6 +162,8 @@ interact :: proc(program: ^Program, redex: Pair) {
 		apply(program, redex)
 	case {.SWI, .NUM}:
 		cond(program, redex)
+	case {.OPE, .NUM}:
+		operate(program, redex)
 	case:
 		if a.tag == .REF && b == {.VAR, ROOT} do call(program, redex)
 		else if a.tag == .VAR || b.tag == .VAR {
@@ -231,6 +241,7 @@ delete_node :: proc(program: ^Program, address: Node_Address) {
 	program.nodes[address] = nil
 }
 
+// TODO: Num needs to be copied so we can erase them, rn nums stay forever
 @(private = "file")
 erase :: proc(program: ^Program, redex: Pair) {
 	a, b := redex.left, redex.right
@@ -240,7 +251,7 @@ erase :: proc(program: ^Program, redex: Pair) {
 		a, b = b, a
 	}
 
-	// a is ERA or REF
+	// a is ERA or REF or NUM
 	// b is CON or DUP
 	node_addr := b.data.(Node_Address)
 	node := program.nodes[node_addr].(Pair)
@@ -445,10 +456,11 @@ cond :: proc(program: ^Program, redex: Pair) {
 	addr_swi := swi.data.(Node_Address)
 	pair := program.nodes[addr_swi].(Pair)
 
-	type := num.data.(Num_Address) & 0x0003
-	addr_num := (num.data.(Num_Address) >> 2) & 0x3FFF
-	is_zero: bool
+	type := num.data.(Num_Address) & 0x00000003
+	addr_num := (num.data.(Num_Address) >> 2) & 0x3FFFFFFF
 	value := program.nums[addr_num]
+
+	is_zero: bool
 	switch type {
 	case 0:
 		is_zero = transmute(u32)value == 0
@@ -466,16 +478,115 @@ cond :: proc(program: ^Program, redex: Pair) {
 
 		link(program, {pair.left, node_con})
 	} else {
-		addr := u32(len(program.nums))
-		append(&program.nums, value)
+		addr_new_num := Num_Address((u32(len(program.nums)) << 2) | u32(result_type))
+		append(&program.nums, result)
 
-		new_addr := (addr << 2) | u32(type)
-
-		node_con1 := create_node(program, .CON, {{.NUM, Num_Address(new_addr)}, pair.right})
+		node_con1 := create_node(program, .CON, {{.NUM, addr_new_num}, pair.right})
 		node_con2 := create_node(program, .CON, {{.ERA, Empty{}}, node_con1})
 
 		link(program, {pair.left, node_con2})
 	}
+}
+
+@(private = "file")
+operate :: proc(program: ^Program, redex: Pair) {
+	op, num := redex.left, redex.right
+
+	if op.tag != .OPE do op, num = num, op
+
+	op_type := Op_Type(op.data.(Node_Address) & 0x00000003)
+	addr := (op.data.(Node_Address) >> 4) & 0x3FFFFFFF
+
+	pair := program.nodes[addr].(Pair)
+
+	left, right := num, pair.left
+
+	value_left, value_right, result_type := get_num_values(program, left, right)
+
+	result: u32
+	#partial switch op_type {
+	case .Add:
+		result = add(value_left, value_right)
+	case .Sub:
+		result = sub(value_left, value_right)
+	case:
+		panic("Unsupported operation")
+	}
+
+	addr_num := Num_Address((u32(len(program.nums)) << 2) | u32(result_type))
+	append(&program.nums, result)
+
+	link(program, {{.NUM, addr_num}, pair.right})
+}
+
+Data_Values :: union {
+	u32,
+	i32,
+	f32,
+}
+
+@(private = "file")
+get_num_values :: proc(program: ^Program, a, b: Port) -> (Data_Values, Data_Values, Data_Type) {
+	a, b := a, b
+
+	type_a := Data_Type(a.data.(Num_Address) & 0x00000003)
+	type_b := Data_Type(b.data.(Num_Address) & 0x00000003)
+
+	if type_a < type_b {
+		a, b = b, a
+		type_a, type_b = type_b, type_a
+	}
+
+	addr_a := (a.data.(Num_Address) >> 2) & 0x3FFFFFFF
+	value_a := program.nums[addr_a]
+
+	addr_b := (b.data.(Num_Address) >> 2) & 0x3FFFFFFF
+	value_b := program.nums[addr_b]
+
+	switch struct {
+		a, b: Data_Type,
+	}({type_a, type_b}) {
+	case {.Float, .Float}:
+		return transmute(f32)value_a, transmute(f32)value_b, .Float
+	case {.Float, .Int}:
+		return transmute(f32)value_a, cast(f32)transmute(i32)value_b, .Float
+	case {.Float, .Uint}:
+		return transmute(f32)value_a, cast(f32)transmute(u32)value_b, .Float
+	case {.Int, .Int}:
+		return transmute(i32)value_a, transmute(i32)value_b, .Int
+	case {.Int, .Uint}:
+		return transmute(i32)value_a, cast(i32)transmute(u32)value_b, .Int
+	case {.Uint, .Uint}:
+		return transmute(u32)value_a, transmute(u32)value_b, .Uint
+	}
+
+	panic("Invalid type")
+}
+
+@(private = "file")
+add :: proc(a, b: Data_Values) -> u32 {
+	switch v in a {
+	case f32:
+		return transmute(u32)(v + b.(f32))
+	case i32:
+		return transmute(u32)(v + b.(i32))
+	case u32:
+		return transmute(u32)(v + b.(u32))
+	}
+	unreachable()
+}
+
+@(private = "file")
+sub :: proc(a, b: Data_Values) -> u32 {
+	switch v in a {
+	case f32:
+		return transmute(u32)(v - b.(f32))
+	case i32:
+		return transmute(u32)(v - b.(i32))
+	case u32:
+		return transmute(u32)(v - b.(u32))
+	}
+	unreachable()
 }
 
 @(private = "file", init)

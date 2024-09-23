@@ -28,23 +28,6 @@ Node_Address :: distinct u32
 Ref_Address :: distinct u32
 Var_Address :: distinct u32
 Num_Address :: distinct u32
-// 4 bits
-Ope_Type :: enum {
-	Add,
-	Sub,
-	Mul,
-	Div,
-	Rem,
-	Eq,
-	Neq,
-	Lt,
-	Gt,
-	And,
-	Or,
-	Xor,
-	Shr,
-	Shl,
-}
 Empty :: struct {}
 
 Pair :: struct {

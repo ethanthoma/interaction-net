@@ -222,6 +222,34 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 			)
 			return term, false
 		}
+	case .OPERATION:
+		term.pos = {token.line, token.column, len(token.lexeme)}
+
+		term.kind = .OPE
+
+		type: Op_Type
+		switch token.lexeme {
+		case "+":
+			type = .Add
+		case "-":
+			type = .Sub
+		}
+
+		expect(p, .LEFT_PAREN) or_return
+
+		left := parse_term(p) or_return
+		defer if !ok do delete_term(left)
+
+		expect(p, .COMMA) or_return
+
+		right := parse_term(p) or_return
+		defer if !ok do delete_term(right)
+
+		expect(p, .RIGHT_PAREN) or_return
+
+		term.data = Op_Data{type, {left, right}}
+
+		fmt.println(term)
 	case:
 		error(
 			p,
