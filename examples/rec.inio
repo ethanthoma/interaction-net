@@ -1,17 +1,7 @@
-@root = a
-    & @rec_sum ~ CON(5, a)
+@root = b
+    & @rec_sum ~ CON(8, b)
 
 @rec_sum = CON(
-    a, 
-    DUP(
-        SWI(
-            CON(
-                CON(b, c),
-                0
-            ),
-            a 
-        ),
-        +(b, d)
-    )
+    a,
+    DUP(b, SWI(CON(@rec_sum, 0), +(b, a)))
 )
-& @rec_sum ~ CON(c, d)

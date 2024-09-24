@@ -1,5 +1,0 @@
-@root = CON(a, b)
-    & CON(b, a) ~ CON(x, CON(y, ERA()))
-    & DUP(y, x) ~ @foo
-
-@foo = ERA()

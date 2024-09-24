@@ -200,9 +200,19 @@ interact :: proc(program: ^Program, redex: Pair) {
 @(private = "file")
 commute :: proc(program: ^Program, redex: Pair) {
 	con, dup := redex.left, redex.right
-	if dup.tag == .CON do con, dup = dup, con
+	if con.tag == .DUP do con, dup = dup, con
 
-	con_addr := get_data(con).(Node_Data).addr
+	con_addr: int
+
+	#partial switch con.tag {
+	case .OPE:
+		con_addr = get_data(con).(Op_Data).addr
+	case .CON, .SWI:
+		con_addr = get_data(con).(Node_Data).addr
+	case:
+		panic("Commute failed")
+	}
+
 	dup_addr := get_data(dup).(Node_Data).addr
 
 	con_node := program.nodes[con_addr].(Pair)
@@ -253,6 +263,24 @@ create_node :: proc(program: ^Program, kind: Tag, pair: Pair) -> (port: Port) {
 }
 
 @(private = "file")
+create_op :: proc(program: ^Program, type: Op_Type, pair: Pair) -> (port: Port) {
+	port.tag = .OPE
+
+	loop: for i := 0; i < len(program.nodes); i += 1 {
+		#partial switch _ in &program.nodes[i] {
+		case nil:
+			program.nodes[i] = pair
+			port.data = transmute(u32)Op_Data{type = type, addr = i}
+			return port
+		}
+	}
+
+	port.data = transmute(u32)Op_Data{type = type, addr = len(program.nodes)}
+	append(&program.nodes, pair)
+	return port
+}
+
+@(private = "file")
 delete_node :: proc(program: ^Program, addr: int) {
 	program.nodes[addr] = nil
 }
@@ -263,27 +291,44 @@ erase :: proc(program: ^Program, redex: Pair) {
 	a, b := redex.left, redex.right
 
 	#partial switch a.tag {
-	case .CON, .DUP, .SWI:
+	case .ERA, .REF, .NUM:
 		a, b = b, a
 	}
 
-	// a is ERA or REF or NUM
-	// b is CON or DUP
-	node_addr := get_data(b).(Node_Data).addr
-	node := program.nodes[node_addr].(Pair)
+	// a is CON or DUP or SWI or OPE
+	// b is ERA or REF or NUM
+	addr: int
+	#partial switch a.tag {
+	case .CON, .DUP, .SWI:
+		addr = get_data(a).(Node_Data).addr
+	case .OPE:
+		addr = get_data(a).(Op_Data).addr
+	}
+	node := program.nodes[addr].(Pair)
 
-	delete_node(program, node_addr)
+	delete_node(program, addr)
 
-	link(program, {a, node.left})
-	link(program, {a, node.right})
+	link(program, {b, node.left})
+	link(program, {b, node.right})
 }
 
 @(private = "file")
 annihilate :: proc(program: ^Program, redex: Pair) {
 	a, b := redex.left, redex.right
 
-	address_a := get_data(a).(Node_Data).addr
-	address_b := get_data(b).(Node_Data).addr
+	address_a: int
+	address_b: int
+
+	#partial switch a.tag {
+	case .OPE:
+		address_a = get_data(a).(Op_Data).addr
+		address_b = get_data(b).(Op_Data).addr
+	case .CON, .DUP, .SWI:
+		address_a = get_data(a).(Node_Data).addr
+		address_b = get_data(b).(Node_Data).addr
+	case:
+		panic("Commute failed")
+	}
 
 	node_a := program.nodes[address_a].(Pair)
 	node_b := program.nodes[address_b].(Pair)
@@ -417,19 +462,8 @@ call :: proc(program: ^Program, redex: Pair) {
 	// also makes it hella slow for long operations
 	// we should probably have a free list instead
 	for node in def.nodes {
-		left := node.left
-		right := node.right
-
-
-		left = adjust_addr(left, offsets)
-		right = adjust_addr(right, offsets)
-
-		for i := 0; i < len(program.nodes); i += 1 {
-			#partial switch _ in &program.nodes[i] {
-			case nil:
-				program.nodes[i] = Pair{left, right}
-			}
-		}
+		left := adjust_addr(node.left, offsets)
+		right := adjust_addr(node.right, offsets)
 		append(&program.nodes, Pair{left, right})
 	}
 
@@ -488,20 +522,13 @@ apply :: proc(program: ^Program, redex: Pair) {
 		delete_node(program, addr_swi)
 	case .OPE:
 		ope := swi_or_ope
+		type := get_data(ope).(Op_Data).type
 
-		addr_ope := get_data(ope).(Node_Data).addr
+		addr_ope := get_data(ope).(Op_Data).addr
 		pair_ope := program.nodes[addr_ope].(Pair)
 
-		node_ope1 := create_node(
-			program,
-			ope.tag,
-			{{tag = .VAR, data = x1}, {tag = .VAR, data = x3}},
-		)
-		node_ope2 := create_node(
-			program,
-			ope.tag,
-			{{tag = .VAR, data = x2}, {tag = .VAR, data = x4}},
-		)
+		node_ope1 := create_op(program, type, {{tag = .VAR, data = x1}, {tag = .VAR, data = x3}})
+		node_ope2 := create_op(program, type, {{tag = .VAR, data = x2}, {tag = .VAR, data = x4}})
 
 		link(program, {node_ope1, pair_ope.left})
 		link(program, {node_ope2, pair_ope.right})
@@ -547,11 +574,11 @@ cond :: proc(program: ^Program, redex: Pair) {
 
 		link(program, {pair.left, node_con})
 	} else {
-		append(&program.nums, value)
 		num_new := Num_Data {
 			type = type,
 			addr = len(program.nums),
 		}
+		append(&program.nums, value)
 
 		node_con1 := create_node(
 			program,
@@ -582,10 +609,9 @@ operate :: proc(program: ^Program, redex: Pair) {
 
 	// swap rule: # ~ $(a, b) -> a ~ $(#, b)
 	if pair.left.tag != .NUM {
-		node_op := create_node(program, .OPE, {num, pair.right})
+		node_op := create_op(program, type, {num, pair.right})
 		link(program, {pair.left, node_op})
 	} else {
-
 		left, right := num, pair.left
 
 		value_left, value_right, result_type := get_num_values(program, left, right)
