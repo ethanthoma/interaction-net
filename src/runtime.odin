@@ -148,22 +148,30 @@ interact :: proc(program: ^Program, redex: Pair) {
 		tag_b: Term_Kind,
 	}({a.tag, b.tag})
 	switch tags {
-	case {.DUP, .CON}, {.SWI, .DUP}:
+	case {.DUP, .CON}, {.SWI, .DUP}, {.OPE, .DUP}:
 		commute(program, redex)
-	case {.CON, .ERA}, {.DUP, .ERA}, {.DUP, .REF}, {.CON, .NUM}, {.DUP, .NUM}, {.SWI, .ERA}:
+	case {.CON, .ERA},
+	     {.DUP, .ERA},
+	     {.DUP, .REF},
+	     {.CON, .NUM},
+	     {.DUP, .NUM},
+	     {.SWI, .ERA},
+	     {.OPE, .ERA}:
 		erase(program, redex)
-	case {.CON, .CON}, {.DUP, .DUP}, {.SWI, .SWI}:
+	case {.CON, .CON}, {.DUP, .DUP}, {.SWI, .SWI}, {.OPE, .OPE}:
 		annihilate(program, redex)
 	case {.ERA, .ERA}, {.REF, .REF}, {.REF, .ERA}, {.NUM, .ERA}, {.NUM, .REF}, {.NUM, .NUM}:
 		void(program, redex)
-	case {.CON, .REF}, {.SWI, .REF}:
+	case {.CON, .REF}, {.SWI, .REF}, {.OPE, .REF}:
 		call(program, redex)
-	case {.SWI, .CON}:
+	case {.SWI, .CON}, {.OPE, .CON}:
 		apply(program, redex)
 	case {.SWI, .NUM}:
 		cond(program, redex)
 	case {.OPE, .NUM}:
 		operate(program, redex)
+	case {.SWI, .OPE}:
+		fmt.printfln("SWI:OPE")
 	case:
 		if a.tag == .REF && b == {.VAR, ROOT} do call(program, redex)
 		else if a.tag == .VAR || b.tag == .VAR {
@@ -187,9 +195,7 @@ interact :: proc(program: ^Program, redex: Pair) {
 @(private = "file")
 commute :: proc(program: ^Program, redex: Pair) {
 	con, dup := redex.left, redex.right
-	if dup.tag == .CON {
-		con, dup = dup, con
-	}
+	if dup.tag == .CON do con, dup = dup, con
 
 	con_addr := con.data.(Node_Address)
 	dup_addr := dup.data.(Node_Address)
@@ -276,7 +282,7 @@ annihilate :: proc(program: ^Program, redex: Pair) {
 	case .CON:
 		link(program, {node_a.left, node_b.right})
 		link(program, {node_a.right, node_b.left})
-	case .DUP, .SWI:
+	case .DUP, .SWI, .OPE:
 		link(program, {node_a.left, node_b.left})
 		link(program, {node_a.right, node_b.right})
 	}
@@ -422,6 +428,8 @@ call :: proc(program: ^Program, redex: Pair) {
 apply :: proc(program: ^Program, redex: Pair) {
 	swi, con := redex.left, redex.right
 
+	if con.tag != .CON do swi, con = con, swi
+
 	addr_swi := swi.data.(Node_Address)
 	addr_con := con.data.(Node_Address)
 
@@ -435,8 +443,8 @@ apply :: proc(program: ^Program, redex: Pair) {
 
 	node_dup := create_node(program, .DUP, {{.VAR, x1}, {.VAR, x2}})
 	node_con := create_node(program, .CON, {{.VAR, x3}, {.VAR, x4}})
-	node_swi1 := create_node(program, .SWI, {{.VAR, x1}, {.VAR, x3}})
-	node_swi2 := create_node(program, .SWI, {{.VAR, x2}, {.VAR, x4}})
+	node_swi1 := create_node(program, swi.tag, {{.VAR, x1}, {.VAR, x3}})
+	node_swi2 := create_node(program, swi.tag, {{.VAR, x2}, {.VAR, x4}})
 
 	link(program, {node_dup, pair_con.left})
 	link(program, {node_con, pair_con.right})
@@ -488,6 +496,7 @@ cond :: proc(program: ^Program, redex: Pair) {
 	}
 }
 
+// TODO: handle case where left is not a num
 @(private = "file")
 operate :: proc(program: ^Program, redex: Pair) {
 	op, num := redex.left, redex.right
@@ -519,6 +528,7 @@ operate :: proc(program: ^Program, redex: Pair) {
 	link(program, {{.NUM, addr_num}, pair.right})
 }
 
+@(private = "file")
 Data_Values :: union {
 	u32,
 	i32,
