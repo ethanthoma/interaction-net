@@ -1,31 +1,31 @@
 package main
 
 Term :: struct {
-	kind: Term_Kind,
-	data: union {
-		Var_Data,
-		Node_Data,
-		Num_Data,
-		Op_Data,
+	kind:    Tag,
+	payload: union {
+		Var_Payload,
+		Node_Payload,
+		Num_Payload,
+		Op_Payload,
 	},
-	pos:  struct {
+	pos:     struct {
 		line:   int,
 		column: int,
 		len:    int,
 	},
 }
 
-Var_Data :: struct {
+Var_Payload :: struct {
 	name: string,
 }
 
-Node_Data :: struct {
+Node_Payload :: struct {
 	left:  ^Term,
 	right: ^Term,
 }
 
-Num_Data :: struct {
-	dtype: Data_Type,
+Num_Payload :: struct {
+	type:  Num_Type,
 	value: union {
 		u32,
 		i32,
@@ -33,32 +33,9 @@ Num_Data :: struct {
 	},
 }
 
-Op_Data :: struct {
-	optype: Op_Type,
-	node:   Node_Data,
-}
-
-Op_Type :: enum u8 {
-	Add,
-	Sub,
-	Mul,
-	Div,
-	Rem,
-	Eq,
-	Neq,
-	Lt,
-	Gt,
-	And,
-	Or,
-	Xor,
-	Shr,
-	Shl,
-}
-
-Data_Type :: enum {
-	Uint,
-	Int,
-	Float,
+Op_Payload :: struct {
+	type: Op_Type,
+	node: Node_Payload,
 }
 
 Redex :: struct {

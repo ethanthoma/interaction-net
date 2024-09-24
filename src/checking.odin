@@ -73,7 +73,7 @@ check_term :: proc(term: ^Term) -> (err: Check_Error) {
 	ctx := cast(^Context)context.user_ptr
 	switch term.kind {
 	case .VAR:
-		name := term.data.(Var_Data).name
+		name := term.payload.(Var_Payload).name
 
 		info := ctx.variable_count[name]
 		info.count += 1
@@ -95,18 +95,18 @@ check_term :: proc(term: ^Term) -> (err: Check_Error) {
 		}
 	case .ERA, .NUM:
 	case .REF:
-		name := term.data.(Var_Data).name
+		name := term.payload.(Var_Payload).name
 		if name not_in ctx.definition_names {
 			ctx.err_ctx^ = {term.pos.line, term.pos.column, term.pos.len}
 			error("in definition `@%s`, the reference `@%s` is not defined", ctx.def_name, name)
 			return .Unbound_Reference
 		}
 	case .CON, .DUP, .OPE, .SWI:
-		node_data: Node_Data
-		if term.kind == .OPE do node_data = term.data.(Op_Data).node
-		else do node_data = term.data.(Node_Data)
-		check_term(node_data.left) or_return
-		check_term(node_data.right) or_return
+		node_payload: Node_Payload
+		if term.kind == .OPE do node_payload = term.payload.(Op_Payload).node
+		else do node_payload = term.payload.(Node_Payload)
+		check_term(node_payload.left) or_return
+		check_term(node_payload.right) or_return
 	}
 
 	return .None

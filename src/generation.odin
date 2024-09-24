@@ -20,10 +20,10 @@ Book :: struct {
 
 @(private = "file")
 Context :: struct {
-	addresses:   map[string]Ref_Address,
+	addresses:   map[string]Ref_Data,
 	definitions: map[string]Definition,
 	parsed_refs: map[string]bool,
-	vars:        map[string]Var_Address,
+	vars:        map[string]Var_Data,
 }
 
 make_book :: proc() -> Book {
@@ -42,10 +42,10 @@ delete_book :: proc(book: ^Book) {
 
 generate :: proc(book: ^Book, definitions: map[string]Definition) {
 	ctx := Context {
-		addresses   = make(map[string]Ref_Address),
+		addresses   = make(map[string]Ref_Data),
 		definitions = definitions,
 		parsed_refs = make(map[string]bool),
-		vars        = make(map[string]Var_Address),
+		vars        = make(map[string]Var_Data),
 	}
 	defer delete(ctx.addresses)
 	defer delete(ctx.parsed_refs)
@@ -58,7 +58,7 @@ generate :: proc(book: ^Book, definitions: map[string]Definition) {
 
 @(private = "file")
 generate_definition :: proc(book: ^Book, definition: Definition) {
-	addr := add_or_get_ref_addr(book, definition.name)
+	addr := add_or_get_ref_addr(book, definition.name).addr
 
 	assign_at(
 		&book.defs,
@@ -93,14 +93,14 @@ generate_definition :: proc(book: ^Book, definition: Definition) {
 }
 
 @(private = "file")
-add_or_get_ref_addr :: proc(book: ^Book, name: string) -> Ref_Address {
+add_or_get_ref_addr :: proc(book: ^Book, name: string) -> Ref_Data {
 	ctx := cast(^Context)context.user_ptr
 
 	if addr, ok := ctx.addresses[name]; ok do return addr
 
 	if parsed, ok := ctx.parsed_refs[name]; !ok do ctx.parsed_refs[name] = false
 
-	ctx.addresses[name] = Ref_Address(len(ctx.addresses))
+	ctx.addresses[name] = Ref_Data(len(ctx.addresses))
 
 	return ctx.addresses[name]
 }
@@ -108,47 +108,47 @@ add_or_get_ref_addr :: proc(book: ^Book, name: string) -> Ref_Address {
 @(private = "file")
 generate_term :: proc(book: ^Book, def: ^Def, term: ^Term) -> (port: Port) {
 	ctx := cast(^Context)context.user_ptr
+
+	port.tag = term.kind
+
 	switch term.kind {
 	case .VAR:
-		name := term.data.(Var_Data).name
+		name := term.payload.(Var_Payload).name
 		if var_addr, exists := ctx.vars[name]; exists {
-			return {tag = .VAR, data = var_addr}
+			port.data = transmute(u32)var_addr
 		} else {
-			var_addr := Var_Address(len(ctx.vars))
+			var_addr := Var_Data {
+				addr = len(ctx.vars),
+			}
 			ctx.vars[name] = var_addr
-			return {tag = .VAR, data = var_addr}
+			port.data = transmute(u32)var_addr
 		}
 	case .ERA:
-		return {tag = .ERA, data = Empty{}}
+		port.data = transmute(u32)Empty{}
 	case .REF:
-		name := term.data.(Var_Data).name
-		addr := add_or_get_ref_addr(book, name)
-
-		return {tag = .REF, data = addr}
+		name := term.payload.(Var_Payload).name
+		port.data = transmute(u32)add_or_get_ref_addr(book, name)
 	case .CON, .DUP, .SWI:
-		port = Port {
-			tag = term.kind,
-		}
+		node_payload := term.payload.(Node_Payload)
 
-		node_data := term.data.(Node_Data)
-		left_port := generate_term(book, def, node_data.left)
-		right_port := generate_term(book, def, node_data.right)
+		left_port := generate_term(book, def, node_payload.left)
+		right_port := generate_term(book, def, node_payload.right)
 
 		pair: Pair = {left_port, right_port}
 
+		addr := len(def.nodes)
+
+		port.data = transmute(u32)Node_Data{addr = addr}
+
 		append(&def.nodes, pair)
-
-		node_index := len(def.nodes) - 1
-		port.data = Node_Address(node_index)
-
-		return port
 	case .NUM:
-		dtype := u32(term.data.(Num_Data).dtype)
-		offset := u32(len(def.numbers))
-		addr := Num_Address(u32(len(def.numbers) << 2) | dtype)
+		type := term.payload.(Num_Payload).type
+		addr := len(def.numbers)
+
+		port.data = transmute(u32)Num_Data{type = type, addr = addr}
 
 		value: u32
-		switch v in term.data.(Num_Data).value {
+		switch v in term.payload.(Num_Payload).value {
 		case u32:
 			value = transmute(u32)v
 		case i32:
@@ -158,26 +158,19 @@ generate_term :: proc(book: ^Book, def: ^Def, term: ^Term) -> (port: Port) {
 		}
 
 		append(&def.numbers, value)
-		return {tag = .NUM, data = addr}
 	case .OPE:
-		port = Port {
-			tag = term.kind,
-		}
-
-		node_data := term.data.(Op_Data).node
-		left_port := generate_term(book, def, node_data.left)
-		right_port := generate_term(book, def, node_data.right)
+		node_payload := term.payload.(Op_Payload).node
+		left_port := generate_term(book, def, node_payload.left)
+		right_port := generate_term(book, def, node_payload.right)
 
 		pair: Pair = {left_port, right_port}
 
-		type := u32(term.data.(Op_Data).optype)
-		addr := (u32(len(def.nodes)) << 4) | type
+		type := term.payload.(Op_Payload).type
+		addr := len(def.nodes)
 
 		append(&def.nodes, pair)
 
-		port.data = Node_Address(addr)
-
-		return port
+		port.data = transmute(u32)Op_Data{type = type, addr = addr}
 	}
 
 	return port

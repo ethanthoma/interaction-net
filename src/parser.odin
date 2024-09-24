@@ -32,9 +32,9 @@ delete_parser :: proc(p: ^Parser) {
 }
 
 delete_term :: proc(term: ^Term) {
-	if node_data, match := term.data.(Node_Data); match {
-		delete_term(node_data.left)
-		delete_term(node_data.right)
+	if node_payload, match := term.payload.(Node_Payload); match {
+		delete_term(node_payload.left)
+		delete_term(node_payload.right)
 	}
 
 	free(term)
@@ -158,7 +158,7 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 
 		term.kind = .REF
 
-		term.data = Var_Data {
+		term.payload = Var_Payload {
 			name = token.lexeme,
 		}
 	case .IDENTIFIER:
@@ -192,13 +192,13 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 
 			expect(p, .RIGHT_PAREN) or_return
 
-			term.data = Node_Data {
+			term.payload = Node_Payload {
 				left  = left,
 				right = right,
 			}
 		case:
 			term.kind = .VAR
-			term.data = Var_Data {
+			term.payload = Var_Payload {
 				name = token.lexeme,
 			}
 		}
@@ -208,11 +208,11 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 		term.kind = .NUM
 
 		if value, is_uint := strconv.parse_uint(token.lexeme, 10); is_uint {
-			term.data = Num_Data{.Uint, cast(u32)value}
+			term.payload = Num_Payload{.Uint, cast(u32)value}
 		} else if value, is_int := strconv.parse_int(token.lexeme, 10); is_int {
-			term.data = Num_Data{.Int, cast(i32)value}
+			term.payload = Num_Payload{.Int, cast(i32)value}
 		} else if value, is_float := strconv.parse_f32(token.lexeme); is_float {
-			term.data = Num_Data{.Float, value}
+			term.payload = Num_Payload{.Float, value}
 		} else {
 			error(
 				p,
@@ -247,7 +247,7 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 
 		expect(p, .RIGHT_PAREN) or_return
 
-		term.data = Op_Data{type, {left, right}}
+		term.payload = Op_Payload{type, {left, right}}
 	case:
 		error(
 			p,
