@@ -1,0 +1,29 @@
+@num     = 100 
+@sum_num = 4096
+
+@root = a
+    & @fun ~ CON(@num, a)
+
+@sum = CON(
+    a,
+    DUP(b, SWI(CON(@sum, 0), +(b, a)))
+)
+
+@fun = CON(
+    a,
+    DUP(
+        DUP(
+            SWI(CON(CON(@fun, ERA()), @sum), b),
+            SWI(CON(
+                CON(
+                    CON(DUP(c, d), DUP(-(e, f), e)),
+                    DUP(d, c)
+                ),
+                CON(@sum_num, g)
+            ), b)
+        ),
+        SWI(CON(
+            f, g
+        ), a)
+    )
+)

@@ -114,6 +114,10 @@ recursive_print :: proc(program: ^Program, port: Port, sb: ^strings.Builder) {
 			fmt.sbprint(sb, "+(")
 		case .Sub:
 			fmt.sbprint(sb, "-(")
+		case .Mul:
+			fmt.sbprint(sb, "*(")
+		case .Div:
+			fmt.sbprint(sb, "/(")
 		case:
 			panic("NOT SUPPORTED OP")
 		}
@@ -312,10 +316,10 @@ erase :: proc(program: ^Program, redex: Pair) {
 	}
 	node := program.nodes[addr].(Pair)
 
+	delete_node(program, addr)
+
 	link(program, {b, node.left})
 	link(program, {b, node.right})
-
-	delete_node(program, addr)
 }
 
 @(private = "file")
@@ -623,6 +627,10 @@ operate :: proc(program: ^Program, redex: Pair) {
 			result = add(value_left, value_right)
 		case .Sub:
 			result = sub(value_left, value_right)
+		case .Mul:
+			result = mul(value_left, value_right)
+		case .Div:
+			result = div(value_left, value_right)
 		case:
 			panic("Unsupported operation")
 		}
@@ -635,18 +643,6 @@ operate :: proc(program: ^Program, redex: Pair) {
 
 		link(program, {{tag = .NUM, data = transmute(u32)num_new}, pair.right})
 	}
-}
-
-@(private = "file")
-apply_operation :: proc(program: ^Program) {
-
-}
-
-@(private = "file")
-Data_Values :: union {
-	u32,
-	i32,
-	f32,
 }
 
 @(private = "file")
@@ -709,6 +705,32 @@ sub :: proc(a, b: Data_Values) -> u32 {
 		return transmute(u32)(v - b.(i32))
 	case u32:
 		return transmute(u32)(v - b.(u32))
+	}
+	unreachable()
+}
+
+@(private = "file")
+mul :: proc(a, b: Data_Values) -> u32 {
+	switch v in a {
+	case f32:
+		return transmute(u32)(v * b.(f32))
+	case i32:
+		return transmute(u32)(v * b.(i32))
+	case u32:
+		return transmute(u32)(v * b.(u32))
+	}
+	unreachable()
+}
+
+@(private = "file")
+div :: proc(a, b: Data_Values) -> u32 {
+	switch v in a {
+	case f32:
+		return transmute(u32)(v / b.(f32))
+	case i32:
+		return transmute(u32)(v / b.(i32))
+	case u32:
+		return transmute(u32)(v / b.(u32))
 	}
 	unreachable()
 }

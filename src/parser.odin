@@ -233,6 +233,10 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 			type = .Add
 		case "-":
 			type = .Sub
+		case "*":
+			type = .Mul
+		case "/":
+			type = .Div
 		}
 
 		expect(p, .LEFT_PAREN) or_return
