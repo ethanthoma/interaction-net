@@ -1,4 +1,4 @@
-@num     = 100 
+@num     = 2 
 @sum_num = 4096
 
 @root = a
@@ -16,14 +16,14 @@
             SWI(CON(CON(@fun, ERA()), @sum), b),
             SWI(CON(
                 CON(
-                    CON(DUP(c, d), DUP(-(e, f), e)),
+                    CON(DUP(c, d), DUP(+(e, f), e)),
                     DUP(d, c)
                 ),
                 CON(@sum_num, g)
             ), b)
         ),
         SWI(CON(
-            f, g
+            CON(f, ERA()), g
         ), a)
     )
 )
