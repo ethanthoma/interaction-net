@@ -201,28 +201,31 @@ commute :: proc(program: ^Program, redex: Pair) {
 	if con.tag == .DUP do con, dup = dup, con
 
 	con_addr: int
-
-	#partial switch con.tag {
-	case .OPE:
-		con_addr = get_data(con).(Op_Data).addr
-	case .CON, .SWI:
-		con_addr = get_data(con).(Node_Data).addr
-	case:
-		panic("Commute failed")
-	}
-
 	dup_addr := get_data(dup).(Node_Data).addr
-
-	con_node := program.nodes[con_addr].(Pair)
-	dup_node := program.nodes[dup_addr].(Pair)
 
 	x1 := create_var(program)
 	x2 := create_var(program)
 	x3 := create_var(program)
 	x4 := create_var(program)
 
-	node_1 := create_node(program, con.tag, {{tag = .VAR, data = x1}, {tag = .VAR, data = x2}})
-	node_2 := create_node(program, con.tag, {{tag = .VAR, data = x3}, {tag = .VAR, data = x4}})
+	node_1, node_2: Port
+	#partial switch con.tag {
+	case .OPE:
+		con_addr = get_data(con).(Op_Data).addr
+		type := get_data(con).(Op_Data).type
+		node_1 = create_op(program, type, {{tag = .VAR, data = x1}, {tag = .VAR, data = x2}})
+		node_2 = create_op(program, type, {{tag = .VAR, data = x3}, {tag = .VAR, data = x4}})
+	case .CON, .SWI:
+		con_addr = get_data(con).(Node_Data).addr
+		node_1 = create_node(program, con.tag, {{tag = .VAR, data = x1}, {tag = .VAR, data = x2}})
+		node_2 = create_node(program, con.tag, {{tag = .VAR, data = x3}, {tag = .VAR, data = x4}})
+	case:
+		panic("Commute failed")
+	}
+
+	con_node := program.nodes[con_addr].(Pair)
+	dup_node := program.nodes[dup_addr].(Pair)
+
 	node_3 := create_node(program, dup.tag, {{tag = .VAR, data = x1}, {tag = .VAR, data = x3}})
 	node_4 := create_node(program, dup.tag, {{tag = .VAR, data = x2}, {tag = .VAR, data = x4}})
 
@@ -309,10 +312,10 @@ erase :: proc(program: ^Program, redex: Pair) {
 	}
 	node := program.nodes[addr].(Pair)
 
-	delete_node(program, addr)
-
 	link(program, {b, node.left})
 	link(program, {b, node.right})
+
+	delete_node(program, addr)
 }
 
 @(private = "file")
