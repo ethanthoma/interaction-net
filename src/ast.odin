@@ -8,11 +8,7 @@ Term :: struct {
 		Num_Payload,
 		Op_Payload,
 	},
-	pos:     struct {
-		line:   int,
-		column: int,
-		len:    int,
-	},
+	pos:     Position,
 }
 
 Var_Payload :: struct {

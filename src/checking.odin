@@ -21,8 +21,8 @@ Context :: struct {
 
 @(private = "file")
 Variable_Info :: struct {
-	count:             int,
-	line, column, len: int,
+	count:    int,
+	position: Position,
 }
 
 check :: proc(defs: map[string]Definition) -> (err_ctx: Error_Context, err: Check_Error) {
@@ -77,13 +77,11 @@ check_term :: proc(term: ^Term) -> (err: Check_Error) {
 
 		info := ctx.variable_count[name]
 		info.count += 1
-		info.line = term.pos.line
-		info.column = term.pos.column
-		info.len = term.pos.len
+		info.position = term.pos
 		ctx.variable_count[name] = info
 
 		if info.count > 2 {
-			ctx.err_ctx^ = {info.line, info.column, info.len}
+			ctx.err_ctx^ = {info.position.line, info.position.column, info.position.len}
 
 			error(
 				"in definition `@%s`, the variable `%s` is referenced more than twice (%d)",
@@ -117,7 +115,7 @@ check_linearity :: proc(def: ^Definition) -> (err: Check_Error) {
 	ctx := cast(^Context)context.user_ptr
 	for var, info in ctx.variable_count {
 		if info.count != 2 {
-			ctx.err_ctx^ = {info.line, info.column, info.len}
+			ctx.err_ctx^ = {info.position.line, info.position.column, info.position.len}
 			error(
 				"in definition `@%s`, the variable `%s` has %d references, expected 2",
 				def.name,

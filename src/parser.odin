@@ -2,6 +2,7 @@ package main
 
 import "core:encoding/ansi"
 import "core:fmt"
+import "core:mem"
 import "core:strconv"
 import "core:testing"
 
@@ -10,27 +11,29 @@ Parser :: struct {
 	current:     int,
 	definitions: map[string]Definition,
 	err_ctx:     Error_Context,
+	allocator:   mem.Allocator,
 }
 
-make_parser :: proc(tokens: []Token) -> Parser {
-	return Parser{tokens, 0, make(map[string]Definition), {1, 1, 1}}
+make_parser :: proc(tokens: []Token) -> (p: Parser) {
+	p.tokens = tokens
+
+	arena := new(mem.Arena)
+	mem.arena_init(arena, make([]byte, 1 << 16))
+	p.allocator = mem.arena_allocator(arena)
+
+	p.err_ctx = {1, 1, 1}
+
+	return p
 }
 
 delete_parser :: proc(p: ^Parser) {
-	for _, &def in p.definitions {
-		delete_term(def.root)
-
-		for &redex in def.redexes {
-			delete_term(redex.left)
-			delete_term(redex.right)
-		}
-
-		delete(def.redexes)
-	}
-
-	delete(p.definitions)
+	free_all(p.allocator)
+	arena := cast(^mem.Arena)p.allocator.data
+	delete(arena.data)
+	free(arena)
 }
 
+@(private = "file")
 delete_term :: proc(term: ^Term) {
 	if node_payload, match := term.payload.(Node_Payload); match {
 		delete_term(node_payload.left)
@@ -41,6 +44,7 @@ delete_term :: proc(term: ^Term) {
 }
 
 parse :: proc(p: ^Parser) -> (definitions: map[string]Definition, ok: bool = true) {
+	context.allocator = p.allocator
 	for !is_at_end(p) {
 		parse_definition(p) or_return
 	}
@@ -65,7 +69,7 @@ parse_definition :: proc(p: ^Parser) -> (ok: bool = true) {
 	if name in p.definitions {
 		error(
 			p,
-			{sym.line, sym.column, len(sym.lexeme) + len(token.lexeme)},
+			{sym.position.line, sym.position.column, sym.position.len + token.position.len},
 			"`@%s` is already defined",
 			name,
 		)
@@ -103,13 +107,7 @@ parse_definition :: proc(p: ^Parser) -> (ok: bool = true) {
 @(private = "file")
 expect :: proc(p: ^Parser, type: Token_Type) -> (token: Token, ok: bool = true) {
 	defer if !ok {
-		error(
-			p,
-			{token.line, token.column, len(token.lexeme)},
-			"expected token %v, got %v",
-			type,
-			token.type,
-		)
+		error(p, token.position, "expected token %v, got %v", type, token.type)
 	}
 
 	if token, ok = peek(p); token.type == type {
@@ -141,7 +139,7 @@ peek :: proc(p: ^Parser) -> (token: Token, ok: bool = true) {
 parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 	if is_at_end(p) {
 		token := p.tokens[p.current - 1]
-		error(p, {token.line, token.column, len(token.lexeme)}, "unexpected EOF")
+		error(p, token.position, "unexpected EOF")
 		return term, false
 	}
 
@@ -150,7 +148,7 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 
 	#partial switch token, _ := advance_token(p); token.type {
 	case .SYMBOL:
-		term.pos = {token.line, token.column, 1}
+		term.pos = token.position
 
 		token = expect(p, .IDENTIFIER) or_return
 
@@ -162,7 +160,7 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 			name = token.lexeme,
 		}
 	case .IDENTIFIER:
-		term.pos = {token.line, token.column, len(token.lexeme)}
+		term.pos = token.position
 
 		switch token.lexeme {
 		case "ERA":
@@ -203,7 +201,7 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 			}
 		}
 	case .NUMBER:
-		term.pos = {token.line, token.column, len(token.lexeme)}
+		term.pos = token.position
 
 		term.kind = .NUM
 
@@ -214,16 +212,11 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 		} else if value, is_float := strconv.parse_f32(token.lexeme); is_float {
 			term.payload = Num_Payload{.Float, value}
 		} else {
-			error(
-				p,
-				{token.line, token.column, len(token.lexeme)},
-				"number is not parsable: `%s`",
-				token.lexeme,
-			)
+			error(p, token.position, "number is not parsable: `%s`", token.lexeme)
 			return term, false
 		}
 	case .OPERATION:
-		term.pos = {token.line, token.column, len(token.lexeme)}
+		term.pos = token.position
 
 		term.kind = .OPE
 
@@ -255,7 +248,7 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 	case:
 		error(
 			p,
-			{token.line, token.column, len(token.lexeme)},
+			token.position,
 			"expected token to be %v, %v, or %v, got %v",
 			Token_Type.IDENTIFIER,
 			Token_Type.SYMBOL,
@@ -269,8 +262,8 @@ parse_term :: proc(p: ^Parser) -> (term: ^Term, ok: bool = true) {
 }
 
 @(private = "file")
-error :: proc(p: ^Parser, err_ctx: Error_Context, msg: string, args: ..any) {
-	p.err_ctx = err_ctx
+error :: proc(p: ^Parser, position: Position, msg: string, args: ..any) {
+	p.err_ctx = {position.line, position.column, position.len}
 	fmt.eprint(ansi.CSI + ansi.FG_RED + ansi.SGR + "Error" + ansi.CSI + ansi.RESET + ansi.SGR)
 	fmt.eprintf(" (%d:%d): ", p.err_ctx.line, p.err_ctx.column)
 	fmt.eprintf(msg, ..args)

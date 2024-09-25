@@ -148,10 +148,9 @@ advance_rune :: proc(t: ^Tokenizer) -> (c: rune, ok: bool) {
 add_token :: proc(t: ^Tokenizer, type: Token_Type) {
 	text := t.input[t.offset:t.current]
 	token := Token {
-		type   = type,
+		type = type,
 		lexeme = text,
-		line   = t.err_ctx.line,
-		column = t.err_ctx.column,
+		position = {line = t.err_ctx.line, column = t.err_ctx.column, len = len(text)},
 	}
 
 	t.err_ctx.column += len(text)

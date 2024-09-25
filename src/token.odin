@@ -15,8 +15,13 @@ Token_Type :: enum {
 }
 
 Token :: struct {
-	type:   Token_Type,
-	lexeme: string,
+	type:     Token_Type,
+	lexeme:   string,
+	position: Position,
+}
+
+Position :: struct {
 	line:   int,
 	column: int,
+	len:    int,
 }

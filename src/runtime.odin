@@ -70,75 +70,6 @@ print_time :: proc() {
 }
 
 @(private = "file")
-recursive_print :: proc(program: ^Program, port: Port, sb: ^strings.Builder) {
-	#partial switch port.tag {
-	case .ERA:
-		fmt.sbprint(sb, "ERA()")
-	case .REF:
-		addr := get_data(port).(Ref_Data).addr
-		name := (cast(^Context)context.user_ptr).book.names[addr]
-		fmt.sbprintf(sb, "@%v", name)
-	case .VAR:
-		got := enter(program, port)
-		if got != port {
-			recursive_print(program, got, sb)
-		} else {
-			addr := get_data(port).(Var_Data).addr
-			fmt.sbprintf(sb, "v%d", addr)
-		}
-	case .NUM:
-		type := get_data(port).(Num_Data).type
-		addr := get_data(port).(Num_Data).addr
-		value := program.nums[addr]
-		switch type {
-		case .Uint:
-			fmt.sbprintf(sb, "%v", transmute(u32)value)
-		case .Int:
-			fmt.sbprintf(sb, "%v", transmute(i32)value)
-		case .Float:
-			fmt.sbprintf(sb, "%v", transmute(f32)value)
-		}
-	case .OPE:
-		type := get_data(port).(Op_Data).type
-		addr := get_data(port).(Op_Data).addr
-
-		#partial switch type {
-		case .Add:
-			fmt.sbprint(sb, "+(")
-		case .Sub:
-			fmt.sbprint(sb, "-(")
-		case .Mul:
-			fmt.sbprint(sb, "*(")
-		case .Div:
-			fmt.sbprint(sb, "/(")
-		case:
-			panic("NOT SUPPORTED OP")
-		}
-
-		pair := program.nodes[addr]
-		recursive_print(program, pair.?.left, sb)
-		fmt.sbprint(sb, ", ")
-		recursive_print(program, pair.?.right, sb)
-		fmt.sbprint(sb, ")")
-	case:
-		#partial switch port.tag {
-		case .CON:
-			fmt.sbprint(sb, "CON(")
-		case .DUP:
-			fmt.sbprint(sb, "DUP(")
-		case .SWI:
-			fmt.sbprint(sb, "SWI(")
-		}
-		addr := get_data(port).(Node_Data).addr
-		pair := program.nodes[addr]
-		recursive_print(program, pair.?.left, sb)
-		fmt.sbprint(sb, ", ")
-		recursive_print(program, pair.?.right, sb)
-		fmt.sbprint(sb, ")")
-	}
-}
-
-@(private = "file")
 interact :: proc(program: ^Program, redex: Pair) {
 	a, b := redex.left, redex.right
 	ctx := cast(^Context)context.user_ptr
@@ -174,6 +105,7 @@ interact :: proc(program: ^Program, redex: Pair) {
 		operate(program, redex)
 	case {.SWI, .OPE}:
 		fmt.printfln("SWI:OPE")
+		fmt.println(program, redex)
 	case:
 		if a.tag == .REF && b == {tag = .VAR, data = ROOT} do call(program, redex)
 		else if a.tag == .VAR || b.tag == .VAR {
