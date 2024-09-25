@@ -66,6 +66,12 @@ Num_Type :: enum u8 {
 	Float,
 }
 
+Num_Value :: union {
+	u32,
+	i32,
+	f32,
+}
+
 Num_Data :: bit_field u32 {
 	type: Num_Type | 2,
 	addr: int      | 29 - 2,

@@ -26,13 +26,7 @@ Node_Payload :: struct {
 
 Num_Payload :: struct {
 	type:  Num_Type,
-	value: Data_Values,
-}
-
-Data_Values :: union {
-	u32,
-	i32,
-	f32,
+	value: Num_Value,
 }
 
 Op_Payload :: struct {

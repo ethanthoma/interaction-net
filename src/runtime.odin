@@ -53,15 +53,8 @@ run :: proc(book: ^Book) {
 
 	time.stopwatch_stop(&ctx.stopwatch)
 
-	sb := strings.builder_make()
-
-	recursive_print(&program, {tag = .VAR, data = ROOT}, &sb)
-
-	result := strings.to_string(sb)
-	defer delete(result)
-
 	print_time()
-	fmt.printfln("Result:\t%v", result)
+	fmt.printfln("Result:\t%v", serialize(&program, book))
 }
 
 @(private = "file")
@@ -387,7 +380,6 @@ link :: proc(program: ^Program, redex: Pair) {
 	}
 }
 
-@(private = "file")
 enter :: proc(program: ^Program, var: Port) -> Port {
 	var := var
 
@@ -646,7 +638,7 @@ operate :: proc(program: ^Program, redex: Pair) {
 }
 
 @(private = "file")
-get_num_values :: proc(program: ^Program, a, b: Port) -> (Data_Values, Data_Values, Num_Type) {
+get_num_values :: proc(program: ^Program, a, b: Port) -> (Num_Value, Num_Value, Num_Type) {
 	a, b := a, b
 
 	type_a := get_data(a).(Num_Data).type
@@ -684,7 +676,7 @@ get_num_values :: proc(program: ^Program, a, b: Port) -> (Data_Values, Data_Valu
 }
 
 @(private = "file")
-add :: proc(a, b: Data_Values) -> u32 {
+add :: proc(a, b: Num_Value) -> u32 {
 	switch v in a {
 	case f32:
 		return transmute(u32)(v + b.(f32))
@@ -697,7 +689,7 @@ add :: proc(a, b: Data_Values) -> u32 {
 }
 
 @(private = "file")
-sub :: proc(a, b: Data_Values) -> u32 {
+sub :: proc(a, b: Num_Value) -> u32 {
 	switch v in a {
 	case f32:
 		return transmute(u32)(v - b.(f32))
@@ -710,7 +702,7 @@ sub :: proc(a, b: Data_Values) -> u32 {
 }
 
 @(private = "file")
-mul :: proc(a, b: Data_Values) -> u32 {
+mul :: proc(a, b: Num_Value) -> u32 {
 	switch v in a {
 	case f32:
 		return transmute(u32)(v * b.(f32))
@@ -723,7 +715,7 @@ mul :: proc(a, b: Data_Values) -> u32 {
 }
 
 @(private = "file")
-div :: proc(a, b: Data_Values) -> u32 {
+div :: proc(a, b: Num_Value) -> u32 {
 	switch v in a {
 	case f32:
 		return transmute(u32)(v / b.(f32))
