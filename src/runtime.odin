@@ -60,8 +60,8 @@ run :: proc(book: ^Book) {
 	result := strings.to_string(sb)
 	defer delete(result)
 
-	fmt.printfln("Result:\t%v", result)
 	print_time()
+	fmt.printfln("Result:\t%v", result)
 }
 
 @(private = "file")
