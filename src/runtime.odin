@@ -19,10 +19,10 @@ Program :: struct {
 
 @(private = "file")
 Context :: struct {
-	book:                     ^Book,
-	interactions:             int,
-	accumulated_interactions: int,
-	stopwatch:                time.Stopwatch,
+	book:             ^Book,
+	interactions:     int,
+	accumulated_time: int,
+	stopwatch:        time.Stopwatch,
 }
 
 run :: proc(book: ^Book) {
@@ -30,9 +30,9 @@ run :: proc(book: ^Book) {
 	context.user_ptr = &ctx
 
 	program: Program = {
-		nodes = make([dynamic]Maybe(Pair)),
-		vars  = make([dynamic]Maybe(Port)),
-		nums  = make([dynamic]u32),
+		nodes = make([dynamic]Maybe(Pair), 0, 2 << 29),
+		vars  = make([dynamic]Maybe(Port), 0, 2 << 29),
+		nums  = make([dynamic]u32, 0, 2 << 29),
 	}
 	queue.init(&program.redexes)
 
@@ -186,14 +186,12 @@ interact :: proc(program: ^Program, redex: Pair) {
 	}
 
 	ctx.interactions += 1
-	ctx.accumulated_interactions += 1
 
-	if ctx.accumulated_interactions >= 10_000 {
+	seconds := time.duration_seconds(time.stopwatch_duration(ctx.stopwatch))
+	if seconds - f64(ctx.accumulated_time) >= 1 {
+		for seconds - f64(ctx.accumulated_time) >= 1 do ctx.accumulated_time += 1
+
 		print_time()
-
-		for ctx.accumulated_interactions >= 10_000 {
-			ctx.accumulated_interactions -= 10_000
-		}
 	}
 }
 
@@ -247,19 +245,24 @@ create_var :: proc(program: ^Program) -> u32 {
 @(private = "file")
 create_node :: proc(program: ^Program, kind: Tag, pair: Pair) -> (port: Port) {
 	port.tag = kind
+	if len(program.nodes) < cap(program.nodes) {
+		port.data = transmute(u32)Node_Data{addr = len(program.nodes)}
+		append(&program.nodes, pair)
+	} else {
+		addr := scan_nodes(program)
+		port.data = transmute(u32)Node_Data{addr = addr}
+		assign_at(&program.nodes, addr, pair)
+	}
+	return port
+}
 
-	loop: for i := 0; i < len(program.nodes); i += 1 {
-		#partial switch _ in &program.nodes[i] {
-		case nil:
-			program.nodes[i] = pair
-			port.data = transmute(u32)Node_Data{addr = i}
-			return port
-		}
+@(private = "file")
+scan_nodes :: proc(program: ^Program) -> int {
+	for i := 0; i < len(program.nodes); i += 1 {
+		if program.nodes[i] == nil do return i
 	}
 
-	port.data = transmute(u32)Node_Data{addr = len(program.nodes)}
-	append(&program.nodes, pair)
-	return port
+	panic("OOM")
 }
 
 @(private = "file")
@@ -456,11 +459,6 @@ call :: proc(program: ^Program, redex: Pair) {
 		create_var(program)
 	}
 
-	// create_node fills in gaps
-	// we use a constant offset so we have to append only
-	// this means the that the node buffer only grows, never shrinks
-	// also makes it hella slow for long operations
-	// we should probably have a free list instead
 	for node in def.nodes {
 		left := adjust_addr(node.left, offsets)
 		right := adjust_addr(node.right, offsets)
