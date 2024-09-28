@@ -32,6 +32,10 @@ is used for function application and deconstructing constructions
 - we should try remove excess branches, OPE node for example. The address is the 
 same length across all nodes so we shouldnt need to switch on it
 - explore simd for math ops? some bucket system
+- lazy evaluations
+    - amb node w/ ref?
+    - ivy has opt in and opt out
+    - go from interaction on input to interaction on output
 
 ## frontend
 - all files can probably be moved into their module for better separation
@@ -47,3 +51,13 @@ parallel
     - maybe returned from the stages to the frontend?
 - each stage has its own error printing that does the same thing, should be 
 moved up
+
+## IO
+- we should implement this lol
+- HVM normalizes and checks if the result is some sort of IO OP
+    - wonder if certain part of the num address space could be used for IO 
+    mapping
+        - num address space isnt exposed in the IR...
+    - HVM way has to wait for the IO to complete, there needs to be a lazy way 
+    for IO
+        - special IO node? seems sucky
