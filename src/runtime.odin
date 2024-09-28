@@ -30,9 +30,9 @@ run :: proc(book: ^Book) {
 	context.user_ptr = &ctx
 
 	program: Program = {
-		nodes = make([dynamic]Maybe(Pair), 0, 2 << 29),
-		vars  = make([dynamic]Maybe(Port), 0, 2 << 29),
-		nums  = make([dynamic]u32, 0, 2 << 29),
+		nodes = make([dynamic]Maybe(Pair), 0, 1 << 29),
+		vars  = make([dynamic]Maybe(Port), 0, 1 << 29),
+		nums  = make([dynamic]u32, 0, 1 << 29),
 	}
 	queue.init(&program.redexes)
 

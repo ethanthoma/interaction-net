@@ -1,6 +1,8 @@
 # Interaction Nets in Odin
 
-This is a simply hobby project to learn Odinlang and interaction nets.
+This is simply a hobby project to learn Odinlang and interaction nets.
+
+Check [docs](./docs/) for list of things planned.
 
 The grammar is based on [HVM](https://github.com/HigherOrderCO/HVM) and their 
 [paper](https://higherorderco.com/)
