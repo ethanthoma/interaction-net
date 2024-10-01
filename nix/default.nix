@@ -1,9 +1,5 @@
-{ pkgs
-, odin
-,
-}:
-pkgs.stdenv.mkDerivation
-rec {
+{ pkgs, odin }:
+pkgs.stdenv.mkDerivation rec {
   pname = "inio";
   version = "0.1";
   src = ../.;
@@ -24,9 +20,8 @@ rec {
     odin test $src/src
   '';
 
-  meta = with pkgs.lib;
-    {
-      description = "Interaction Net compiler and runtime in Odin";
-      platforms = platforms.all;
-    };
+  meta = with pkgs.lib; {
+    description = "Interaction Net compiler and runtime in Odin";
+    platforms = platforms.all;
+  };
 }
