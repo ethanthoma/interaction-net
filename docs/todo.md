@@ -2,14 +2,15 @@
 
 ## runtime
 
-- numbers use indices into a number buffer. We need to duplicate them for 
-erasure, commution, and map
+- delete numbers
 - deleted nodes leave buffer holes, we fill those holes when we run out of 
 buffer capacity via a linear scan which is fine when the hole is within the 
 first 10_000 or so. We should probably have a free list or some tree structure 
 for deleted nodes past 10_000 or so indices.
 - this a multithreaded paradigm without any multithreading...
-    - copy HVM data structures
+    - implement https://github.com/cameron314/concurrentqueue for redexs
+    - implement slotmap instead of flat buffer for nodes
+        - should be concurrent safe
 - gamma-operation and gamma-switch both use apply, the interaction between 
 switch and operation is undefined (what should the semantic meaning be?)
     - idk if the apply operation makes sense. It feels semantically correct for 
@@ -29,6 +30,9 @@ we have to adjust every address
     there must be a way to use simd for this
 - annihilate for gamma should probably be its own rule called destruction as it 
 is used for function application and deconstructing constructions
+    - look into polarity
+        - can probably think about polarity-based optimizations?
+        - is polarity able to be deduced or has to be explictly encoded?
 - we should try remove excess branches, OPE node for example. The address is the 
 same length across all nodes so we shouldnt need to switch on it
 - explore simd for math ops? some bucket system
@@ -36,6 +40,20 @@ same length across all nodes so we shouldnt need to switch on it
     - amb node w/ ref?
     - ivy has opt in and opt out
     - go from interaction on input to interaction on output
+    - HVM1 had explict primary nodes and wires instead of named vars
+        - maybe slotmap or some other ds can help with wires
+        - tree construction from root to redex is log(n)
+        - tree structure mem layout?
+    - multi-primary ports
+        - pointers/indexs into node buffer or a diff buffer
+        - how to make concurrently safe?
+        - can help with async and lazy evals, not sure
+- switch from lafont IC to SIC
+    - gamma to zeta (easy)
+    - refactor examples
+    - explore code/decoder breakdown of @refs
+        - can polarity be used to inform us of anything about a project?
+    - switch to SIC style of naming (project/code/decoder/agents/etc)
 
 ## frontend
 - all files can probably be moved into their module for better separation
@@ -61,3 +79,5 @@ moved up
     - HVM way has to wait for the IO to complete, there needs to be a lazy way 
     for IO
         - special IO node? seems sucky
+        - probably something to do with AMB nodes or some sort of multi-primary 
+        port agent?
