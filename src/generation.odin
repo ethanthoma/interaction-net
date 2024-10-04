@@ -1,9 +1,6 @@
 package main
 
-import "base:runtime"
 import "core:fmt"
-import "core:strconv"
-import "core:strings"
 
 Def :: struct {
 	nodes:   [dynamic]Pair,
@@ -98,7 +95,7 @@ add_or_get_ref_addr :: proc(book: ^Book, name: string) -> Ref_Data {
 
 	if addr, ok := ctx.addresses[name]; ok do return addr
 
-	if parsed, ok := ctx.parsed_refs[name]; !ok do ctx.parsed_refs[name] = false
+	if _, ok := ctx.parsed_refs[name]; !ok do ctx.parsed_refs[name] = false
 
 	ctx.addresses[name] = Ref_Data(len(ctx.addresses))
 
@@ -117,7 +114,7 @@ generate_term :: proc(book: ^Book, def: ^Def, term: ^Term) -> (port: Port) {
 		if var_addr, exists := ctx.vars[name]; exists {
 			port.data = transmute(u32)var_addr
 		} else {
-			var_addr := Var_Data {
+			var_addr = Var_Data {
 				addr = len(ctx.vars),
 			}
 			ctx.vars[name] = var_addr
@@ -150,7 +147,7 @@ generate_term :: proc(book: ^Book, def: ^Def, term: ^Term) -> (port: Port) {
 		value: u32
 		switch v in term.payload.(Num_Payload).value {
 		case u32:
-			value = transmute(u32)v
+			value = v
 		case i32:
 			value = transmute(u32)v
 		case f32:
@@ -180,7 +177,7 @@ generate_term :: proc(book: ^Book, def: ^Def, term: ^Term) -> (port: Port) {
 fmt_book :: proc() {
 	if fmt._user_formatters == nil do fmt.set_user_formatters(new(map[typeid]fmt.User_Formatter))
 
-	err := fmt.register_user_formatter(
+	fmt.register_user_formatter(
 		type_info_of(Book).id,
 		proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
 			m := cast(^Book)arg.data
@@ -205,7 +202,7 @@ fmt_book :: proc() {
 fmt_def :: proc() {
 	if fmt._user_formatters == nil do fmt.set_user_formatters(new(map[typeid]fmt.User_Formatter))
 
-	err := fmt.register_user_formatter(
+	fmt.register_user_formatter(
 		type_info_of(Def).id,
 		proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
 			m := cast(^Def)arg.data

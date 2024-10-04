@@ -2,6 +2,13 @@ package main
 
 import "core:fmt"
 
+Tag_Len :: 3
+
+Num_Type_Len :: 2
+Op_Type_Len :: 4
+
+Addr_Len :: 32 - Tag_Len - max(Num_Type_Len, Op_Type_Len)
+
 Tag :: enum u8 {
 	VAR,
 	ERA,
@@ -14,8 +21,8 @@ Tag :: enum u8 {
 }
 
 Port :: bit_field u32 {
-	tag:  Tag | 3,
-	data: u32 | 29,
+	tag:  Tag | Tag_Len,
+	data: u32 | 32 - Tag_Len,
 }
 
 get_data :: proc(port: Port) -> Data {
@@ -47,17 +54,17 @@ Data :: union {
 }
 
 Var_Data :: bit_field u32 {
-	addr: int | 29,
+	addr: int | Addr_Len,
 }
 
 Empty :: distinct u32
 
 Node_Data :: bit_field u32 {
-	addr: int | 29,
+	addr: int | Addr_Len,
 }
 
 Ref_Data :: bit_field u32 {
-	addr: int | 29,
+	addr: int | Addr_Len,
 }
 
 Num_Type :: enum u8 {
@@ -73,8 +80,8 @@ Num_Value :: union {
 }
 
 Num_Data :: bit_field u32 {
-	type: Num_Type | 2,
-	addr: int      | 29 - 2,
+	type: Num_Type | Num_Type_Len,
+	addr: int      | Addr_Len,
 }
 
 Op_Type :: enum u8 {
@@ -95,8 +102,8 @@ Op_Type :: enum u8 {
 }
 
 Op_Data :: bit_field u32 {
-	type: Op_Type | 4,
-	addr: int     | 29 - 4,
+	type: Op_Type | Op_Type_Len,
+	addr: int     | Addr_Len,
 }
 
 Pair :: struct {
@@ -107,7 +114,7 @@ Pair :: struct {
 fmt_port :: proc() {
 	if fmt._user_formatters == nil do fmt.set_user_formatters(new(map[typeid]fmt.User_Formatter))
 
-	err := fmt.register_user_formatter(
+	fmt.register_user_formatter(
 		type_info_of(Port).id,
 		proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
 			m := cast(^Port)arg.data

@@ -2,7 +2,6 @@ package main
 
 import "core:encoding/ansi"
 import "core:fmt"
-import "core:strings"
 import "core:testing"
 
 Tokenizer :: struct {
@@ -161,7 +160,8 @@ add_token :: proc(t: ^Tokenizer, type: Token_Type) {
 @(private = "file")
 scan_number :: proc(t: ^Tokenizer) -> (ok: bool = true) {
 	has_dot := false
-	for c, ok := peek(t); ok && (is_numeric(c) || c == '.'); c, ok = peek(t) {
+	c: rune
+	for c, ok = peek(t); ok && (is_numeric(c) || c == '.'); c, ok = peek(t) {
 		advance_rune(t)
 
 		if has_dot && c == '.' {
@@ -181,7 +181,8 @@ is_numeric :: proc(c: rune) -> bool {
 
 @(private = "file")
 scan_identifier :: proc(t: ^Tokenizer) -> (ok: bool = true) {
-	for c, ok := peek(t); ok && is_alphanumeric(c); c, ok = peek(t) {
+	c: rune
+	for c, ok = peek(t); ok && is_alphanumeric(c); c, ok = peek(t) {
 		advance_rune(t)
 	}
 	add_token(t, .IDENTIFIER)

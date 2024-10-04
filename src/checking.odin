@@ -161,7 +161,7 @@ test_check_succeed :: proc(t: ^testing.T) {
 
 	testing.expect(t, parse_ok, "Parsing should succeed")
 
-	_, err := check(parser.definitions)
+	_, err := check(definitions)
 
 	testing.expectf(t, err == .None, "Expected %v, got %v", Check_Error.None, err)
 }
@@ -220,7 +220,7 @@ test_check_non_linear_variable_three :: proc(t: ^testing.T) {
 
 	testing.expect(t, parse_ok, "Parsing should succeed")
 
-	_, err := check(parser.definitions)
+	_, err := check(definitions)
 
 	testing.expectf(
 		t,
@@ -250,7 +250,7 @@ test_check_Unbound_Reference :: proc(t: ^testing.T) {
 
 	testing.expect(t, parse_ok, "Parsing should succeed")
 
-	_, err := check(parser.definitions)
+	_, err := check(definitions)
 
 	testing.expectf(
 		t,

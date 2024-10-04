@@ -45,7 +45,7 @@ serialize_port :: proc(program: ^Program, book: ^Book, port: Port, sb: ^strings.
 		value := program.nums[addr]
 		switch type {
 		case .Uint:
-			fmt.sbprintf(sb, "%v", transmute(u32)value)
+			fmt.sbprintf(sb, "%v", value)
 		case .Int:
 			fmt.sbprintf(sb, "%v", transmute(i32)value)
 		case .Float:

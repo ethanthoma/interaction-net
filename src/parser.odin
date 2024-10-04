@@ -294,7 +294,7 @@ test_parser :: proc(t: ^testing.T) {
 
 	testing.expect(t, len(definitions) == 1, "Expected only one definition")
 
-	root, ok := definitions["root"]
+	_, ok := definitions["root"]
 
 	testing.expect(t, ok, "Should have root def")
 

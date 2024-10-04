@@ -2,7 +2,6 @@ package main
 
 import "core:container/queue"
 import "core:fmt"
-import "core:strings"
 import "core:time"
 
 // address of ROOT var
@@ -243,8 +242,33 @@ erase :: proc(program: ^Program, redex: Pair) {
 
 	delete_node(program, addr)
 
+	b_one, b_two: Port
+	if b.tag == .NUM {
+		b_one = b
+		b_two = copy_num(program, b)
+	} else {
+		b_one, b_two = b, b
+	}
+
 	link(program, {b, node.left})
 	link(program, {b, node.right})
+}
+
+@(private = "file")
+copy_num :: #force_inline proc(program: ^Program, num: Port) -> (num_copy: Port) {
+	data := get_data(num).(Num_Data)
+	addr := data.addr
+
+	val := program.nums[addr]
+
+	num_copy = {
+		tag  = .NUM,
+		data = transmute(u32)Num_Data{type = data.type, addr = len(program.nums)},
+	}
+
+	append(&program.nums, val)
+
+	return num_copy
 }
 
 @(private = "file")
@@ -282,7 +306,16 @@ annihilate :: proc(program: ^Program, redex: Pair) {
 }
 
 @(private = "file")
-void :: proc(program: ^Program, redex: Pair) {}
+void :: proc(program: ^Program, redex: Pair) {
+	if redex.left.tag == .NUM {
+		delete_num(program, get_data(redex.left).(Num_Data).addr)
+		delete_num(program, get_data(redex.right).(Num_Data).addr)
+	}
+}
+
+@(private = "file")
+delete_num :: proc(program: ^Program, addr: int) {
+}
 
 @(private = "file")
 link :: proc(program: ^Program, redex: Pair) {
@@ -318,12 +351,12 @@ enter :: proc(program: ^Program, var: Port) -> Port {
 	loop: for var.tag == .VAR {
 		addr := get_data(var).(Var_Data).addr
 		val := vars_exchange(program, addr, nil)
-		switch val in val {
+		switch v in val {
 		case nil:
 			break loop
 		case Port:
 			vars_take(program, addr)
-			var = val
+			var = v
 		}
 	}
 
@@ -386,7 +419,7 @@ call :: proc(program: ^Program, redex: Pair) {
 		return port
 	}
 
-	for var in 0 ..< def.vars {
+	for _ in 0 ..< def.vars {
 		create_var(program)
 	}
 
@@ -663,7 +696,7 @@ div :: proc(a, b: Num_Value) -> u32 {
 fmt_program :: proc() {
 	if fmt._user_formatters == nil do fmt.set_user_formatters(new(map[typeid]fmt.User_Formatter))
 
-	err := fmt.register_user_formatter(
+	fmt.register_user_formatter(
 		type_info_of(Program).id,
 		proc(fi: ^fmt.Info, arg: any, verb: rune) -> bool {
 			m := cast(^Program)arg.data
@@ -675,16 +708,10 @@ fmt_program :: proc() {
 				fmt.wprintfln(fi.writer, "\tNodes:")
 
 				for node, index in m.nodes {
-					switch node in node {
+					switch n in node {
 					case nil:
 					case Pair:
-						fmt.wprintfln(
-							fi.writer,
-							"\t\t%4d:\t%v\t,\t%v",
-							index,
-							node.left,
-							node.right,
-						)
+						fmt.wprintfln(fi.writer, "\t\t%4d:\t%v\t,\t%v", index, n.left, n.right)
 					}
 				}
 
