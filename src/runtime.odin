@@ -1,8 +1,8 @@
 package main
 
-import "core:container/queue"
 import "core:fmt"
 import "core:time"
+import "shared:queue"
 
 // address of ROOT var
 ROOT: u32 : 0
@@ -29,11 +29,11 @@ run :: proc(book: ^Book) {
 	context.user_ptr = &ctx
 
 	program: Program = {
-		nodes = make([dynamic]Maybe(Pair), 0, 1 << 29),
-		vars  = make([dynamic]Maybe(Port), 0, 1 << 29),
+		nodes = make([dynamic]Maybe(Pair), 0, 1 << Addr_Len),
+		vars  = make([dynamic]Maybe(Port), 0, 1 << Addr_Len),
 		nums  = make([dynamic]u32, 0, 1 << 29),
 	}
-	queue.init(&program.redexes)
+	queue.init(&program.redexes, 1 << Addr_Len)
 
 	defer delete(program.nodes)
 	defer delete(program.vars)
@@ -41,12 +41,12 @@ run :: proc(book: ^Book) {
 	defer queue.destroy(&program.redexes)
 
 	assign_at(&program.vars, int(ROOT), nil)
-	queue.push_front(&program.redexes, Pair{{tag = .REF, data = MAIN}, {tag = .VAR, data = ROOT}})
+	queue.push(&program.redexes, Pair{{tag = .REF, data = MAIN}, {tag = .VAR, data = ROOT}})
 
 	time.stopwatch_start(&ctx.stopwatch)
 
 	for {
-		redex := queue.pop_front_safe(&program.redexes) or_break
+		redex := queue.pop(&program.redexes) or_break
 		interact(&program, redex)
 	}
 
@@ -193,6 +193,7 @@ scan_nodes :: proc(program: ^Program) -> int {
 		if program.nodes[i] == nil do return i
 	}
 
+	// TODO: Remove; panics bad
 	panic("OOM")
 }
 
@@ -327,7 +328,7 @@ link :: proc(program: ^Program, redex: Pair) {
 		}
 
 		if a.tag != .VAR {
-			queue.push_back(&program.redexes, Pair{a, b})
+			queue.push(&program.redexes, Pair{a, b})
 			return
 		}
 
@@ -692,6 +693,7 @@ div :: proc(a, b: Num_Value) -> u32 {
 	unreachable()
 }
 
+// destructive
 @(private = "file", init)
 fmt_program :: proc() {
 	if fmt._user_formatters == nil do fmt.set_user_formatters(new(map[typeid]fmt.User_Formatter))
@@ -717,9 +719,19 @@ fmt_program :: proc() {
 
 				fmt.wprintfln(fi.writer, "\tRedexes:")
 
-				for index in 0 ..< queue.len(m.redexes) {
-					redex := queue.get(&m.redexes, index)
-					fmt.wprintfln(fi.writer, "\t\t%4d:\t%v\t~\t%v", index, redex.left, redex.right)
+				{
+					index: int
+					for {
+						redex := queue.pop(&m.redexes) or_break
+						fmt.wprintfln(
+							fi.writer,
+							"\t\t%4d:\t%v\t~\t%v",
+							index,
+							redex.left,
+							redex.right,
+						)
+						index += 1
+					}
 				}
 
 				fmt.wprintfln(fi.writer, "\tVars:")

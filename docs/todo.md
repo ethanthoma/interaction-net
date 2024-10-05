@@ -8,7 +8,6 @@ buffer capacity via a linear scan which is fine when the hole is within the
 first 10_000 or so. We should probably have a free list or some tree structure 
 for deleted nodes past 10_000 or so indices.
 - this a multithreaded paradigm without any multithreading...
-    - implement https://github.com/cameron314/concurrentqueue for redexs
     - implement slotmap instead of flat buffer for nodes
         - should be concurrent safe
 - gamma-operation and gamma-switch both use apply, the interaction between 
