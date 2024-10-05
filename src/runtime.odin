@@ -30,10 +30,10 @@ run :: proc(book: ^Book) {
 
 	program: Program = {
 		nodes = make([dynamic]Maybe(Pair), 0, 1 << Addr_Len),
-		vars  = make([dynamic]Maybe(Port), 0, 1 << Addr_Len),
-		nums  = make([dynamic]u32, 0, 1 << 29),
+		vars  = make([dynamic]Maybe(Port), 0, 1 << (Addr_Len + Op_Type_Len)),
+		nums  = make([dynamic]u32, 0, 1 << (Addr_Len + Num_Type_Len)),
 	}
-	queue.init(&program.redexes, 1 << Addr_Len)
+	queue.init(&program.redexes, 1 << (Addr_Len + 1))
 
 	defer delete(program.nodes)
 	defer delete(program.vars)
@@ -693,7 +693,6 @@ div :: proc(a, b: Num_Value) -> u32 {
 	unreachable()
 }
 
-// destructive
 @(private = "file", init)
 fmt_program :: proc() {
 	if fmt._user_formatters == nil do fmt.set_user_formatters(new(map[typeid]fmt.User_Formatter))
@@ -719,19 +718,9 @@ fmt_program :: proc() {
 
 				fmt.wprintfln(fi.writer, "\tRedexes:")
 
-				{
-					index: int
-					for {
-						redex := queue.pop(&m.redexes) or_break
-						fmt.wprintfln(
-							fi.writer,
-							"\t\t%4d:\t%v\t~\t%v",
-							index,
-							redex.left,
-							redex.right,
-						)
-						index += 1
-					}
+				for index in 0 ..< queue.len(&m.redexes) {
+					redex := queue.get(&m.redexes, index)
+					fmt.wprintfln(fi.writer, "\t\t%4d:\t%v\t~\t%v", index, redex.left, redex.right)
 				}
 
 				fmt.wprintfln(fi.writer, "\tVars:")
