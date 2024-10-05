@@ -32,12 +32,13 @@ init :: proc(
 	(capacity & (capacity - 1)) ==
 	0 {
 	q._allocator = allocator
-	q._index_head = 0
-	q._index_tail = 0
+
+	sync.atomic_store_explicit(&q._index_head, 0, .Acquire)
+	sync.atomic_store_explicit(&q._index_tail, 0, .Acquire)
 
 	q._slots = make([]Slot(T), capacity, allocator) or_return
 	for &slot, turn in q._slots {
-		slot.turn = turn
+		sync.atomic_store_explicit(&slot.turn, turn, .Acquire)
 	}
 
 	q._mask = capacity - 1
