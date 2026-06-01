@@ -92,3 +92,20 @@ contains_key :: proc(sm: ^$S/Slot_Map($T), key: Key) -> bool {
 	if key.index < 0 || key.index >= builtin.len(sm.entries) do return false
 	return sync.atomic_load(&sm.entries[key.index].generation) == key.generation
 }
+
+at :: proc(sm: ^$S/Slot_Map($T), index: int) -> ^T {
+	return &sm.entries[index].value
+}
+
+free_at :: proc(sm: ^$S/Slot_Map($T), index: int) -> bool {
+	g := sync.atomic_load(&sm.entries[index].generation)
+	if _, won := sync.atomic_compare_exchange_strong(&sm.entries[index].generation, g, g + 1);
+	   !won {
+		return false
+	}
+
+	sync.atomic_add(&sm.len, -1)
+	queue.push(&sm.free_list, index)
+
+	return true
+}

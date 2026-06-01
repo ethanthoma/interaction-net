@@ -48,6 +48,23 @@ test_generation_invalidates_key :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_at_and_free_at :: proc(t: ^testing.T) {
+	sm: Slot_Map(int)
+	init(&sm, 8)
+	defer destroy(&sm)
+
+	k, _ := insert(&sm, 7)
+	testing.expect(t, at(&sm, k.index)^ == 7)
+
+	at(&sm, k.index)^ = 9
+	testing.expect(t, get(&sm, k).? == 9)
+
+	testing.expect(t, free_at(&sm, k.index))
+	testing.expect(t, len(&sm) == 0)
+	testing.expect(t, !contains_key(&sm, k))
+}
+
+@(test)
 test_property_model :: proc(t: ^testing.T) {
 	for trial in 0 ..< 200 {
 		seed := u64(trial) * 0x9E3779B97F4A7C15 + 1
