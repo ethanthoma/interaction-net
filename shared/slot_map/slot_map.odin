@@ -74,6 +74,7 @@ insert :: proc(sm: ^$S/Slot_Map($T), value: T) -> Key {
 remove :: proc(sm: ^$S/Slot_Map($T), key: Key) -> Maybe(T) {
 	if contains_key(sm, key) {
 		entry := sm.entries[key.index]
+		sm.entries[key.index].generation += 1
 		queue.push(&sm.free_list, key.index)
 		sm.len -= 1
 		return entry.value
