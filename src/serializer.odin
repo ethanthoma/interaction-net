@@ -2,6 +2,7 @@ package main
 
 import "core:fmt"
 import "core:strings"
+import "shared:slot_map"
 
 @(deferred_out = delete_serialized_string)
 serialize :: proc(program: ^Program, book: ^Book) -> string {
@@ -68,10 +69,10 @@ serialize_port :: proc(program: ^Program, book: ^Book, port: Port, sb: ^strings.
 			panic("NOT SUPPORTED OP")
 		}
 
-		pair := program.nodes[addr]
-		serialize_port(program, book, pair.?.left, sb)
+		pair := slot_map.at(&program.nodes, addr)^
+		serialize_port(program, book, pair.left, sb)
 		fmt.sbprint(sb, ", ")
-		serialize_port(program, book, pair.?.right, sb)
+		serialize_port(program, book, pair.right, sb)
 		fmt.sbprint(sb, ")")
 	case:
 		#partial switch port.tag {
@@ -83,10 +84,10 @@ serialize_port :: proc(program: ^Program, book: ^Book, port: Port, sb: ^strings.
 			fmt.sbprint(sb, "SWI(")
 		}
 		addr := get_data(port).(Node_Data).addr
-		pair := program.nodes[addr]
-		serialize_port(program, book, pair.?.left, sb)
+		pair := slot_map.at(&program.nodes, addr)^
+		serialize_port(program, book, pair.left, sb)
 		fmt.sbprint(sb, ", ")
-		serialize_port(program, book, pair.?.right, sb)
+		serialize_port(program, book, pair.right, sb)
 		fmt.sbprint(sb, ")")
 	}
 }

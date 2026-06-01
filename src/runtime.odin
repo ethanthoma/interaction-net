@@ -6,6 +6,7 @@ import "core:math/rand"
 import "core:strings"
 import "core:time"
 import "shared:queue"
+import "shared:slot_map"
 
 // address of ROOT var
 ROOT: u32 : 0
@@ -13,7 +14,7 @@ ROOT: u32 : 0
 MAIN: u32 : 0
 
 Program :: struct {
-	nodes:   [dynamic]Maybe(Pair),
+	nodes:   slot_map.Slot_Map(Pair),
 	redexes: queue.Queue(Pair),
 	vars:    [dynamic]Maybe(Port),
 	nums:    [dynamic]u32,
@@ -31,14 +32,16 @@ run :: proc(book: ^Book) {
 	ctx := Context{book, 0, 0, time.Stopwatch{}}
 	context.user_ptr = &ctx
 
-	program: Program = {
-		nodes = make([dynamic]Maybe(Pair), 0, 1 << Addr_Len),
-		vars  = make([dynamic]Maybe(Port), 0, 1 << (Addr_Len + Op_Type_Len)),
-		nums  = make([dynamic]u32, 0, 1 << (Addr_Len + Num_Type_Len)),
-	}
-	queue.init(&program.redexes, 1 << (Addr_Len + 1))
+	NODE_CAP :: 1 << 20
+	REDEX_CAP :: 1 << 20
 
-	defer delete(program.nodes)
+	program: Program
+	slot_map.init(&program.nodes, NODE_CAP)
+	program.vars = make([dynamic]Maybe(Port), 0, NODE_CAP)
+	program.nums = make([dynamic]u32, 0, NODE_CAP)
+	queue.init(&program.redexes, REDEX_CAP)
+
+	defer slot_map.destroy(&program.nodes)
 	defer delete(program.vars)
 	defer delete(program.nums)
 	defer queue.destroy(&program.redexes)
@@ -92,14 +95,13 @@ evaluate :: proc(book: ^Book, seed: Maybe(u64) = nil) -> string {
 	NODE_CAP :: 1 << 16
 	REDEX_CAP :: 1 << 14
 
-	program: Program = {
-		nodes = make([dynamic]Maybe(Pair), 0, NODE_CAP),
-		vars  = make([dynamic]Maybe(Port), 0, NODE_CAP),
-		nums  = make([dynamic]u32, 0, NODE_CAP),
-	}
+	program: Program
+	slot_map.init(&program.nodes, NODE_CAP)
+	program.vars = make([dynamic]Maybe(Port), 0, NODE_CAP)
+	program.nums = make([dynamic]u32, 0, NODE_CAP)
 	queue.init(&program.redexes, REDEX_CAP)
 
-	defer delete(program.nodes)
+	defer slot_map.destroy(&program.nodes)
 	defer delete(program.vars)
 	defer delete(program.nums)
 	defer queue.destroy(&program.redexes)
@@ -211,8 +213,8 @@ commute :: proc(program: ^Program, redex: Pair) {
 		panic("Commute failed")
 	}
 
-	con_node := program.nodes[con_addr].(Pair)
-	dup_node := program.nodes[dup_addr].(Pair)
+	con_node := slot_map.at(&program.nodes, con_addr)^
+	dup_node := slot_map.at(&program.nodes, dup_addr)^
 
 	node_3 := create_node(program, dup.tag, {{tag = .VAR, data = x1}, {tag = .VAR, data = x3}})
 	node_4 := create_node(program, dup.tag, {{tag = .VAR, data = x2}, {tag = .VAR, data = x4}})
@@ -236,48 +238,29 @@ create_var :: proc(program: ^Program) -> u32 {
 @(private = "file")
 create_node :: proc(program: ^Program, kind: Tag, pair: Pair) -> (port: Port) {
 	port.tag = kind
-	if len(program.nodes) < cap(program.nodes) {
-		port.data = transmute(u32)Node_Data{addr = len(program.nodes)}
-		append(&program.nodes, pair)
-	} else {
-		addr := scan_nodes(program)
-		port.data = transmute(u32)Node_Data{addr = addr}
-		assign_at(&program.nodes, addr, pair)
-	}
+	key := alloc_node(program, pair)
+	port.data = transmute(u32)Node_Data{addr = key}
 	return port
-}
-
-@(private = "file")
-scan_nodes :: proc(program: ^Program) -> int {
-	for i := 0; i < len(program.nodes); i += 1 {
-		if program.nodes[i] == nil do return i
-	}
-
-	// TODO: Remove; panics bad
-	panic("OOM")
 }
 
 @(private = "file")
 create_op :: proc(program: ^Program, type: Op_Type, pair: Pair) -> (port: Port) {
 	port.tag = .OPE
-
-	loop: for i := 0; i < len(program.nodes); i += 1 {
-		#partial switch _ in &program.nodes[i] {
-		case nil:
-			program.nodes[i] = pair
-			port.data = transmute(u32)Op_Data{type = type, addr = i}
-			return port
-		}
-	}
-
-	port.data = transmute(u32)Op_Data{type = type, addr = len(program.nodes)}
-	append(&program.nodes, pair)
+	key := alloc_node(program, pair)
+	port.data = transmute(u32)Op_Data{type = type, addr = key}
 	return port
 }
 
 @(private = "file")
+alloc_node :: proc(program: ^Program, pair: Pair) -> int {
+	key, ok := slot_map.insert(&program.nodes, pair)
+	if !ok do panic("node arena full")
+	return key.index
+}
+
+@(private = "file")
 delete_node :: proc(program: ^Program, addr: int) {
-	program.nodes[addr] = nil
+	slot_map.free_at(&program.nodes, addr)
 }
 
 // TODO: Num needs to be copied so we can erase them, rn nums stay forever
@@ -299,7 +282,7 @@ erase :: proc(program: ^Program, redex: Pair) {
 	case .OPE:
 		addr = get_data(a).(Op_Data).addr
 	}
-	node := program.nodes[addr].(Pair)
+	node := slot_map.at(&program.nodes, addr)^
 
 	delete_node(program, addr)
 
@@ -350,8 +333,8 @@ annihilate :: proc(program: ^Program, redex: Pair) {
 		panic("Commute failed")
 	}
 
-	node_a := program.nodes[address_a].(Pair)
-	node_b := program.nodes[address_b].(Pair)
+	node_a := slot_map.at(&program.nodes, address_a)^
+	node_b := slot_map.at(&program.nodes, address_b)^
 
 	#partial switch a.tag {
 	case .CON:
@@ -450,27 +433,33 @@ call :: proc(program: ^Program, redex: Pair) {
 
 	def := (cast(^Context)context.user_ptr).book.defs[addr]
 
-	offsets := [?]int{len(program.vars), len(program.nodes), len(program.nums)}
-	adjust_addr := proc(port: Port, offsets: [3]int) -> Port {
+	var_offset := len(program.vars)
+	num_offset := len(program.nums)
+
+	node_map := make([]int, len(def.nodes))
+	defer delete(node_map)
+	for _, i in def.nodes {
+		node_map[i] = alloc_node(program, Pair{})
+	}
+
+	adjust_addr := proc(port: Port, var_offset, num_offset: int, node_map: []int) -> Port {
 		port := port
 
 		switch port.tag {
 		case .VAR:
-			port.data = transmute(u32)Var_Data{addr = offsets[0] + get_data(port).(Var_Data).addr}
+			port.data = transmute(u32)Var_Data{addr = var_offset + get_data(port).(Var_Data).addr}
 		case .CON, .DUP, .SWI:
-			port.data = transmute(u32)Node_Data {
-				addr = offsets[1] + get_data(port).(Node_Data).addr,
-			}
+			port.data = transmute(u32)Node_Data{addr = node_map[get_data(port).(Node_Data).addr]}
 		case .NUM:
 			port.data = transmute(u32)Num_Data {
 				type = get_data(port).(Num_Data).type,
-				addr = offsets[2] + get_data(port).(Num_Data).addr,
+				addr = num_offset + get_data(port).(Num_Data).addr,
 			}
 		case .ERA, .REF:
 		case .OPE:
 			port.data = transmute(u32)Op_Data {
 				type = get_data(port).(Op_Data).type,
-				addr = offsets[1] + get_data(port).(Op_Data).addr,
+				addr = node_map[get_data(port).(Op_Data).addr],
 			}
 		}
 
@@ -481,17 +470,23 @@ call :: proc(program: ^Program, redex: Pair) {
 		create_var(program)
 	}
 
-	for node in def.nodes {
-		left := adjust_addr(node.left, offsets)
-		right := adjust_addr(node.right, offsets)
-		append(&program.nodes, Pair{left, right})
+	for node, i in def.nodes {
+		left := adjust_addr(node.left, var_offset, num_offset, node_map)
+		right := adjust_addr(node.right, var_offset, num_offset, node_map)
+		slot_map.at(&program.nodes, node_map[i])^ = Pair{left, right}
 	}
 
 	for pair in def.redexes {
-		link(program, {adjust_addr(pair.left, offsets), adjust_addr(pair.right, offsets)})
+		link(
+			program,
+			{
+				adjust_addr(pair.left, var_offset, num_offset, node_map),
+				adjust_addr(pair.right, var_offset, num_offset, node_map),
+			},
+		)
 	}
 
-	link(program, {adjust_addr(def.root, offsets), b})
+	link(program, {adjust_addr(def.root, var_offset, num_offset, node_map), b})
 
 	for num in def.numbers {
 		append(&program.nums, num)
@@ -505,7 +500,7 @@ apply :: proc(program: ^Program, redex: Pair) {
 	if con.tag != .CON do swi_or_ope, con = con, swi_or_ope
 
 	addr_con := get_data(con).(Node_Data).addr
-	pair_con := program.nodes[addr_con].(Pair)
+	pair_con := slot_map.at(&program.nodes, addr_con)^
 
 	x1 := create_var(program)
 	x2 := create_var(program)
@@ -523,7 +518,7 @@ apply :: proc(program: ^Program, redex: Pair) {
 		swi := swi_or_ope
 
 		addr_swi := get_data(swi).(Node_Data).addr
-		pair_swi := program.nodes[addr_swi].(Pair)
+		pair_swi := slot_map.at(&program.nodes, addr_swi)^
 
 		node_swi1 := create_node(
 			program,
@@ -545,7 +540,7 @@ apply :: proc(program: ^Program, redex: Pair) {
 		type := get_data(ope).(Op_Data).type
 
 		addr_ope := get_data(ope).(Op_Data).addr
-		pair_ope := program.nodes[addr_ope].(Pair)
+		pair_ope := slot_map.at(&program.nodes, addr_ope)^
 
 		node_ope1 := create_op(program, type, {{tag = .VAR, data = x1}, {tag = .VAR, data = x3}})
 		node_ope2 := create_op(program, type, {{tag = .VAR, data = x2}, {tag = .VAR, data = x4}})
@@ -566,7 +561,7 @@ cond :: proc(program: ^Program, redex: Pair) {
 	if swi.tag != .SWI do swi, num = num, swi
 
 	addr_swi := get_data(swi).(Node_Data).addr
-	pair := program.nodes[addr_swi].(Pair)
+	pair := slot_map.at(&program.nodes, addr_swi)^
 
 	type := get_data(num).(Num_Data).type
 	addr_num := get_data(num).(Num_Data).addr
@@ -625,7 +620,7 @@ operate :: proc(program: ^Program, redex: Pair) {
 	type := get_data(op).(Op_Data).type
 	addr := get_data(op).(Op_Data).addr
 
-	pair := program.nodes[addr].(Pair)
+	pair := slot_map.at(&program.nodes, addr)^
 
 	// swap rule: # ~ $(a, b) -> a ~ $(#, b)
 	if pair.left.tag != .NUM {
@@ -764,15 +759,7 @@ fmt_program :: proc "contextless" () {
 			case 'v':
 				fmt.wprintfln(fi.writer, "Program{{")
 
-				fmt.wprintfln(fi.writer, "\tNodes:")
-
-				for node, index in m.nodes {
-					switch n in node {
-					case nil:
-					case Pair:
-						fmt.wprintfln(fi.writer, "\t\t%4d:\t%v\t,\t%v", index, n.left, n.right)
-					}
-				}
+				fmt.wprintfln(fi.writer, "\tNodes: %d", slot_map.len(&m.nodes))
 
 				fmt.wprintfln(fi.writer, "\tRedexes:")
 
