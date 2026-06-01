@@ -43,7 +43,7 @@ serialize_port :: proc(program: ^Program, book: ^Book, port: Port, sb: ^strings.
 	case .NUM:
 		type := get_data(port).(Num_Data).type
 		addr := get_data(port).(Num_Data).addr
-		value := program.nums[addr]
+		value := slot_map.at(&program.nums, addr)^
 		switch type {
 		case .Uint:
 			fmt.sbprintf(sb, "%v", value)

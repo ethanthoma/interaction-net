@@ -4,6 +4,7 @@ import "base:runtime"
 import "core:fmt"
 import "core:math/rand"
 import "core:strings"
+import "core:sync"
 import "core:time"
 import "shared:queue"
 import "shared:slot_map"
@@ -13,11 +14,13 @@ ROOT: u32 : 0
 // address of MAIN ref
 MAIN: u32 : 0
 
+VARS_EMPTY: u32 : max(u32)
+
 Program :: struct {
 	nodes:   slot_map.Slot_Map(Pair),
 	redexes: queue.Queue(Pair),
-	vars:    [dynamic]Maybe(Port),
-	nums:    [dynamic]u32,
+	vars:    slot_map.Slot_Map(u32),
+	nums:    slot_map.Slot_Map(u32),
 }
 
 @(private = "file")
@@ -33,20 +36,22 @@ run :: proc(book: ^Book) {
 	context.user_ptr = &ctx
 
 	NODE_CAP :: 1 << 20
-	REDEX_CAP :: 1 << 20
+	VAR_CAP :: 1 << 20
+	NUM_CAP :: 1 << 18
+	REDEX_CAP :: 1 << 16
 
 	program: Program
 	slot_map.init(&program.nodes, NODE_CAP)
-	program.vars = make([dynamic]Maybe(Port), 0, NODE_CAP)
-	program.nums = make([dynamic]u32, 0, NODE_CAP)
+	slot_map.init(&program.vars, VAR_CAP)
+	slot_map.init(&program.nums, NUM_CAP)
 	queue.init(&program.redexes, REDEX_CAP)
 
 	defer slot_map.destroy(&program.nodes)
-	defer delete(program.vars)
-	defer delete(program.nums)
+	defer slot_map.destroy(&program.nums)
+	defer slot_map.destroy(&program.vars)
 	defer queue.destroy(&program.redexes)
 
-	assign_at(&program.vars, int(ROOT), nil)
+	slot_map.insert(&program.vars, VARS_EMPTY)
 	queue.push(&program.redexes, Pair{{tag = .REF, data = MAIN}, {tag = .VAR, data = ROOT}})
 
 	time.stopwatch_start(&ctx.stopwatch)
@@ -97,16 +102,16 @@ evaluate :: proc(book: ^Book, seed: Maybe(u64) = nil) -> string {
 
 	program: Program
 	slot_map.init(&program.nodes, NODE_CAP)
-	program.vars = make([dynamic]Maybe(Port), 0, NODE_CAP)
-	program.nums = make([dynamic]u32, 0, NODE_CAP)
+	slot_map.init(&program.nums, NODE_CAP)
+	slot_map.init(&program.vars, NODE_CAP)
 	queue.init(&program.redexes, REDEX_CAP)
 
 	defer slot_map.destroy(&program.nodes)
-	defer delete(program.vars)
-	defer delete(program.nums)
+	defer slot_map.destroy(&program.nums)
+	defer slot_map.destroy(&program.vars)
 	defer queue.destroy(&program.redexes)
 
-	assign_at(&program.vars, int(ROOT), nil)
+	slot_map.insert(&program.vars, VARS_EMPTY)
 	queue.push(&program.redexes, Pair{{tag = .REF, data = MAIN}, {tag = .VAR, data = ROOT}})
 
 	if s, ok := seed.?; ok {
@@ -230,9 +235,14 @@ commute :: proc(program: ^Program, redex: Pair) {
 
 @(private = "file")
 create_var :: proc(program: ^Program) -> u32 {
-	addr := len(program.vars)
-	append(&program.vars, nil)
-	return transmute(u32)Var_Data{addr = addr}
+	key, ok := slot_map.insert(&program.vars, VARS_EMPTY)
+	if !ok do panic("var arena full")
+	return transmute(u32)Var_Data{addr = key.index}
+}
+
+@(private = "file")
+delete_var :: proc(program: ^Program, addr: int) {
+	slot_map.free_at(&program.vars, addr)
 }
 
 @(private = "file")
@@ -259,11 +269,17 @@ alloc_node :: proc(program: ^Program, pair: Pair) -> int {
 }
 
 @(private = "file")
+alloc_num :: proc(program: ^Program, value: u32) -> int {
+	key, ok := slot_map.insert(&program.nums, value)
+	if !ok do panic("num arena full")
+	return key.index
+}
+
+@(private = "file")
 delete_node :: proc(program: ^Program, addr: int) {
 	slot_map.free_at(&program.nodes, addr)
 }
 
-// TODO: Num needs to be copied so we can erase them, rn nums stay forever
 @(private = "file")
 erase :: proc(program: ^Program, redex: Pair) {
 	a, b := redex.left, redex.right
@@ -294,8 +310,8 @@ erase :: proc(program: ^Program, redex: Pair) {
 		b_one, b_two = b, b
 	}
 
-	link(program, {b, node.left})
-	link(program, {b, node.right})
+	link(program, {b_one, node.left})
+	link(program, {b_two, node.right})
 }
 
 @(private = "file")
@@ -303,14 +319,12 @@ copy_num :: #force_inline proc(program: ^Program, num: Port) -> (num_copy: Port)
 	data := get_data(num).(Num_Data)
 	addr := data.addr
 
-	val := program.nums[addr]
+	val := slot_map.at(&program.nums, addr)^
 
 	num_copy = {
 		tag  = .NUM,
-		data = transmute(u32)Num_Data{type = data.type, addr = len(program.nums)},
+		data = transmute(u32)Num_Data{type = data.type, addr = alloc_num(program, val)},
 	}
-
-	append(&program.nums, val)
 
 	return num_copy
 }
@@ -357,6 +371,7 @@ void :: proc(program: ^Program, redex: Pair) {
 
 @(private = "file")
 delete_num :: proc(program: ^Program, addr: int) {
+	slot_map.free_at(&program.nums, addr)
 }
 
 @(private = "file")
@@ -379,7 +394,7 @@ link :: proc(program: ^Program, redex: Pair) {
 
 		switch new_a in vars_exchange(program, var_addr, b) {
 		case Port:
-			vars_take(program, var_addr)
+			delete_var(program, var_addr)
 			a = new_a
 		case nil:
 			break loop
@@ -397,7 +412,7 @@ enter :: proc(program: ^Program, var: Port) -> Port {
 		case nil:
 			break loop
 		case Port:
-			vars_take(program, addr)
+			delete_var(program, addr)
 			var = v
 		}
 	}
@@ -413,14 +428,13 @@ vars_exchange :: proc(
 ) -> (
 	old_port: Maybe(Port),
 ) {
-	old_port = program.vars[addr]
-	program.vars[addr] = new_port
-	return old_port
-}
+	bits := VARS_EMPTY
+	if port, ok := new_port.?; ok do bits = transmute(u32)port
 
-@(private = "file")
-vars_take :: proc(program: ^Program, addr: int) {
-	vars_exchange(program, addr, nil)
+	old := sync.atomic_exchange(slot_map.at(&program.vars, addr), bits)
+	if old == VARS_EMPTY do return nil
+
+	return transmute(Port)old
 }
 
 @(private = "file")
@@ -433,8 +447,13 @@ call :: proc(program: ^Program, redex: Pair) {
 
 	def := (cast(^Context)context.user_ptr).book.defs[addr]
 
-	var_offset := len(program.vars)
-	num_offset := len(program.nums)
+	var_map := make([]int, def.vars)
+	defer delete(var_map)
+	for i in 0 ..< def.vars {
+		key, ok := slot_map.insert(&program.vars, VARS_EMPTY)
+		if !ok do panic("var arena full")
+		var_map[i] = key.index
+	}
 
 	node_map := make([]int, len(def.nodes))
 	defer delete(node_map)
@@ -442,18 +461,24 @@ call :: proc(program: ^Program, redex: Pair) {
 		node_map[i] = alloc_node(program, Pair{})
 	}
 
-	adjust_addr := proc(port: Port, var_offset, num_offset: int, node_map: []int) -> Port {
+	num_map := make([]int, len(def.numbers))
+	defer delete(num_map)
+	for value, i in def.numbers {
+		num_map[i] = alloc_num(program, value)
+	}
+
+	adjust_addr := proc(port: Port, var_map, node_map, num_map: []int) -> Port {
 		port := port
 
 		switch port.tag {
 		case .VAR:
-			port.data = transmute(u32)Var_Data{addr = var_offset + get_data(port).(Var_Data).addr}
+			port.data = transmute(u32)Var_Data{addr = var_map[get_data(port).(Var_Data).addr]}
 		case .CON, .DUP, .SWI:
 			port.data = transmute(u32)Node_Data{addr = node_map[get_data(port).(Node_Data).addr]}
 		case .NUM:
 			port.data = transmute(u32)Num_Data {
 				type = get_data(port).(Num_Data).type,
-				addr = num_offset + get_data(port).(Num_Data).addr,
+				addr = num_map[get_data(port).(Num_Data).addr],
 			}
 		case .ERA, .REF:
 		case .OPE:
@@ -466,13 +491,9 @@ call :: proc(program: ^Program, redex: Pair) {
 		return port
 	}
 
-	for _ in 0 ..< def.vars {
-		create_var(program)
-	}
-
 	for node, i in def.nodes {
-		left := adjust_addr(node.left, var_offset, num_offset, node_map)
-		right := adjust_addr(node.right, var_offset, num_offset, node_map)
+		left := adjust_addr(node.left, var_map, node_map, num_map)
+		right := adjust_addr(node.right, var_map, node_map, num_map)
 		slot_map.at(&program.nodes, node_map[i])^ = Pair{left, right}
 	}
 
@@ -480,17 +501,13 @@ call :: proc(program: ^Program, redex: Pair) {
 		link(
 			program,
 			{
-				adjust_addr(pair.left, var_offset, num_offset, node_map),
-				adjust_addr(pair.right, var_offset, num_offset, node_map),
+				adjust_addr(pair.left, var_map, node_map, num_map),
+				adjust_addr(pair.right, var_map, node_map, num_map),
 			},
 		)
 	}
 
-	link(program, {adjust_addr(def.root, var_offset, num_offset, node_map), b})
-
-	for num in def.numbers {
-		append(&program.nums, num)
-	}
+	link(program, {adjust_addr(def.root, var_map, node_map, num_map), b})
 }
 
 @(private = "file")
@@ -565,7 +582,7 @@ cond :: proc(program: ^Program, redex: Pair) {
 
 	type := get_data(num).(Num_Data).type
 	addr_num := get_data(num).(Num_Data).addr
-	value := program.nums[addr_num]
+	value := slot_map.at(&program.nums, addr_num)^
 
 	is_zero: bool
 	switch type {
@@ -591,9 +608,8 @@ cond :: proc(program: ^Program, redex: Pair) {
 	} else {
 		num_new := Num_Data {
 			type = type,
-			addr = len(program.nums),
+			addr = alloc_num(program, value),
 		}
-		append(&program.nums, value)
 
 		node_con1 := create_node(
 			program,
@@ -608,6 +624,8 @@ cond :: proc(program: ^Program, redex: Pair) {
 
 		link(program, {pair.left, node_con2})
 	}
+
+	delete_num(program, addr_num)
 }
 
 // TODO: handle case where left is not a num
@@ -645,11 +663,13 @@ operate :: proc(program: ^Program, redex: Pair) {
 			panic("Unsupported operation")
 		}
 
+		delete_num(program, get_data(left).(Num_Data).addr)
+		delete_num(program, get_data(right).(Num_Data).addr)
+
 		num_new := Num_Data {
 			type = result_type,
-			addr = len(program.nums),
+			addr = alloc_num(program, result),
 		}
-		append(&program.nums, result)
 
 		link(program, {{tag = .NUM, data = transmute(u32)num_new}, pair.right})
 	}
@@ -668,10 +688,10 @@ get_num_values :: proc(program: ^Program, a, b: Port) -> (Num_Value, Num_Value, 
 	}
 
 	addr_a := get_data(a).(Num_Data).addr
-	value_a := program.nums[addr_a]
+	value_a := slot_map.at(&program.nums, addr_a)^
 
 	addr_b := get_data(b).(Num_Data).addr
-	value_b := program.nums[addr_b]
+	value_b := slot_map.at(&program.nums, addr_b)^
 
 	switch struct {
 		a, b: Num_Type,
@@ -768,25 +788,9 @@ fmt_program :: proc "contextless" () {
 					fmt.wprintfln(fi.writer, "\t\t%4d:\t%v\t~\t%v", index, redex.left, redex.right)
 				}
 
-				fmt.wprintfln(fi.writer, "\tVars:")
+				fmt.wprintfln(fi.writer, "\tVars: %d", slot_map.len(&m.vars))
 
-				for var, index in m.vars {
-					#partial switch var in var {
-					case Port:
-						if index == int(ROOT) {
-							fmt.wprintf(fi.writer, "\t\tROOT:\t")
-						} else {
-							fmt.wprintf(fi.writer, "\t\t%4d:\t", index)
-						}
-						fmt.wprintfln(fi.writer, "%v", var)
-					}
-				}
-
-				fmt.wprintfln(fi.writer, "\tNums:")
-
-				for num, index in m.nums {
-					fmt.wprintfln(fi.writer, "\t\t%4d:\t%v", index, num)
-				}
+				fmt.wprintfln(fi.writer, "\tNums: %d", slot_map.len(&m.nums))
 
 				fmt.wprintf(fi.writer, "}}")
 			case:
