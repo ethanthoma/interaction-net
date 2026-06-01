@@ -60,10 +60,17 @@ insert :: proc(sm: ^$S/Slot_Map($T), value: T) -> (key: Key, ok: bool) {
 }
 
 remove :: proc(sm: ^$S/Slot_Map($T), key: Key) -> Maybe(T) {
-	if !contains_key(sm, key) do return nil
+	if key.index < 0 || key.index >= builtin.len(sm.entries) do return nil
+
+	if _, won := sync.atomic_compare_exchange_strong(
+		&sm.entries[key.index].generation,
+		key.generation,
+		key.generation + 1,
+	); !won {
+		return nil
+	}
 
 	value := sm.entries[key.index].value
-	sync.atomic_add(&sm.entries[key.index].generation, 1)
 	sync.atomic_add(&sm.len, -1)
 	queue.push(&sm.free_list, key.index)
 

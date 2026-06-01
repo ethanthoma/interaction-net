@@ -3,6 +3,7 @@ package slot_map
 import "base:builtin"
 import "base:runtime"
 import "core:math/rand"
+import "core:sync"
 import "core:testing"
 import "core:thread"
 
@@ -269,4 +270,64 @@ test_full_then_reuse :: proc(t: ^testing.T) {
 		testing.expect(t, ok)
 	}
 	testing.expect(t, len(&sm) == CAP)
+}
+
+@(private = "file")
+Race :: struct {
+	sm:      ^Slot_Map(int),
+	keys:    []Key,
+	barrier: ^sync.Barrier,
+	removed: int,
+}
+
+@(private = "file")
+race_remover :: proc(r: ^Race) {
+	for k in r.keys {
+		sync.barrier_wait(r.barrier)
+		if remove(r.sm, k) != nil do sync.atomic_add(&r.removed, 1)
+	}
+}
+
+@(test)
+test_concurrent_double_remove :: proc(t: ^testing.T) {
+	N :: 1000
+	NUM_THREADS :: 8
+
+	sm: Slot_Map(int)
+	init(&sm, 1 << 11)
+	defer destroy(&sm)
+
+	keys: [dynamic]Key
+	defer delete(keys)
+	for i in 0 ..< N {
+		k, _ := insert(&sm, i)
+		append(&keys, k)
+	}
+
+	barrier: sync.Barrier
+	sync.barrier_init(&barrier, NUM_THREADS)
+	race := Race{&sm, keys[:], &barrier, 0}
+
+	threads: [NUM_THREADS]^thread.Thread
+	for &th in threads do th = thread.create_and_start_with_poly_data(&race, race_remover)
+	for th in threads do thread.join(th)
+	for th in threads do thread.destroy(th)
+
+	testing.expectf(
+		t,
+		sync.atomic_load(&race.removed) == N,
+		"each key must remove exactly once: %d removed, want %d",
+		race.removed,
+		N,
+	)
+	testing.expect(t, len(&sm) == 0)
+
+	seen: map[int]bool
+	defer delete(seen)
+	for i in 0 ..< N {
+		k, ok := insert(&sm, i)
+		testing.expect(t, ok)
+		testing.expectf(t, !seen[k.index], "double-free: slot %d handed out twice", k.index)
+		seen[k.index] = true
+	}
 }
