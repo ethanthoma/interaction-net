@@ -2,7 +2,7 @@ package main
 
 import "core:fmt"
 import "core:strings"
-import "shared:slot_map"
+import "shared:arena"
 
 @(deferred_out = delete_serialized_string)
 serialize :: proc(program: ^Program, book: ^Book) -> string {
@@ -43,7 +43,7 @@ serialize_port :: proc(program: ^Program, book: ^Book, port: Port, sb: ^strings.
 	case .NUM:
 		type := get_data(port).(Num_Data).type
 		addr := get_data(port).(Num_Data).addr
-		value := slot_map.at(&program.nums, addr)^
+		value := arena.at(&program.nums, addr)^
 		switch type {
 		case .Uint:
 			fmt.sbprintf(sb, "%v", value)
@@ -69,7 +69,7 @@ serialize_port :: proc(program: ^Program, book: ^Book, port: Port, sb: ^strings.
 			panic("NOT SUPPORTED OP")
 		}
 
-		pair := slot_map.at(&program.nodes, addr)^
+		pair := arena.at(&program.nodes, addr)^
 		serialize_port(program, book, pair.left, sb)
 		fmt.sbprint(sb, ", ")
 		serialize_port(program, book, pair.right, sb)
@@ -84,7 +84,7 @@ serialize_port :: proc(program: ^Program, book: ^Book, port: Port, sb: ^strings.
 			fmt.sbprint(sb, "SWI(")
 		}
 		addr := get_data(port).(Node_Data).addr
-		pair := slot_map.at(&program.nodes, addr)^
+		pair := arena.at(&program.nodes, addr)^
 		serialize_port(program, book, pair.left, sb)
 		fmt.sbprint(sb, ", ")
 		serialize_port(program, book, pair.right, sb)

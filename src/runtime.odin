@@ -7,9 +7,9 @@ import "core:strings"
 import "core:sync"
 import "core:thread"
 import "core:time"
+import "shared:arena"
 import "shared:deque"
 import "shared:queue"
-import "shared:slot_map"
 
 // address of ROOT var
 ROOT: u32 : 0
@@ -19,10 +19,10 @@ MAIN: u32 : 0
 VARS_EMPTY: u32 : max(u32)
 
 Program :: struct {
-	nodes:       slot_map.Slot_Map(Pair),
+	nodes:       arena.Arena(Pair),
 	redexes:     queue.Queue(Pair),
-	vars:        slot_map.Slot_Map(u32),
-	nums:        slot_map.Slot_Map(u32),
+	vars:        arena.Arena(u32),
+	nums:        arena.Arena(u32),
 	outstanding: int,
 }
 
@@ -44,17 +44,17 @@ run :: proc(book: ^Book) {
 	REDEX_CAP :: 1 << 16
 
 	program: Program
-	slot_map.init(&program.nodes, NODE_CAP)
-	slot_map.init(&program.vars, VAR_CAP)
-	slot_map.init(&program.nums, NUM_CAP)
+	arena.init(&program.nodes, NODE_CAP)
+	arena.init(&program.vars, VAR_CAP)
+	arena.init(&program.nums, NUM_CAP)
 	queue.init(&program.redexes, REDEX_CAP)
 
-	defer slot_map.destroy(&program.nodes)
-	defer slot_map.destroy(&program.nums)
-	defer slot_map.destroy(&program.vars)
+	defer arena.destroy(&program.nodes)
+	defer arena.destroy(&program.nums)
+	defer arena.destroy(&program.vars)
 	defer queue.destroy(&program.redexes)
 
-	slot_map.insert(&program.vars, VARS_EMPTY)
+	seed_root(&program)
 	seed_redex(&program, Pair{{tag = .REF, data = MAIN}, {tag = .VAR, data = ROOT}})
 
 	num_workers := max(os.get_processor_core_count(), 1)
@@ -66,6 +66,13 @@ run :: proc(book: ^Book) {
 	time.stopwatch_stop(&ctx.stopwatch)
 
 	print_time(&ctx)
+
+	serialize_worker := Worker {
+		program = &program,
+	}
+	context.user_ptr = &serialize_worker
+	defer arena.cache_destroy(&serialize_worker.vars)
+
 	fmt.printfln("Result:\t%v", serialize(&program, book))
 }
 
@@ -73,6 +80,13 @@ run :: proc(book: ^Book) {
 seed_redex :: proc(program: ^Program, pair: Pair) {
 	sync.atomic_add(&program.outstanding, 1)
 	queue.push(&program.redexes, pair)
+}
+
+@(private = "file")
+seed_root :: proc(program: ^Program) {
+	c: arena.Cache
+	arena.alloc(&program.vars, &c, VARS_EMPTY)
+	arena.cache_destroy(&c)
 }
 
 @(private = "file")
@@ -85,11 +99,14 @@ push_redex :: proc(program: ^Program, pair: Pair) {
 }
 
 @(private = "file")
-Worker :: struct {
+Worker :: struct #align (arena.CACHE_LINE_SIZE) {
 	program: ^Program,
 	ctx:     ^Context,
 	deques:  []deque.Deque(Pair),
 	id:      int,
+	nodes:   arena.Cache,
+	vars:    arena.Cache,
+	nums:    arena.Cache,
 }
 
 @(private = "file")
@@ -107,11 +124,21 @@ normalize :: proc(program: ^Program, ctx: ^Context, num_workers: int) {
 	defer delete(threads)
 
 	for &worker, id in workers {
-		worker = Worker{program, ctx, deques, id}
+		worker = Worker {
+			program = program,
+			ctx     = ctx,
+			deques  = deques,
+			id      = id,
+		}
 		threads[id] = thread.create_and_start_with_poly_data(&worker, worker_loop)
 	}
 
 	for t in threads do thread.join(t)
+	for &worker in workers {
+		arena.cache_destroy(&worker.nodes)
+		arena.cache_destroy(&worker.vars)
+		arena.cache_destroy(&worker.nums)
+	}
 	for t in threads do thread.destroy(t)
 }
 
@@ -179,20 +206,26 @@ evaluate :: proc(book: ^Book, num_workers := 1) -> string {
 	REDEX_CAP :: 1 << 14
 
 	program: Program
-	slot_map.init(&program.nodes, NODE_CAP)
-	slot_map.init(&program.nums, NODE_CAP)
-	slot_map.init(&program.vars, NODE_CAP)
+	arena.init(&program.nodes, NODE_CAP)
+	arena.init(&program.nums, NODE_CAP)
+	arena.init(&program.vars, NODE_CAP)
 	queue.init(&program.redexes, REDEX_CAP)
 
-	defer slot_map.destroy(&program.nodes)
-	defer slot_map.destroy(&program.nums)
-	defer slot_map.destroy(&program.vars)
+	defer arena.destroy(&program.nodes)
+	defer arena.destroy(&program.nums)
+	defer arena.destroy(&program.vars)
 	defer queue.destroy(&program.redexes)
 
-	slot_map.insert(&program.vars, VARS_EMPTY)
+	seed_root(&program)
 	seed_redex(&program, Pair{{tag = .REF, data = MAIN}, {tag = .VAR, data = ROOT}})
 
 	normalize(&program, &ctx, num_workers)
+
+	serialize_worker := Worker {
+		program = &program,
+	}
+	context.user_ptr = &serialize_worker
+	defer arena.cache_destroy(&serialize_worker.vars)
 
 	return strings.clone(serialize(&program, book))
 }
@@ -284,8 +317,8 @@ commute :: proc(program: ^Program, redex: Pair) {
 		panic("Commute failed")
 	}
 
-	con_node := slot_map.at(&program.nodes, con_addr)^
-	dup_node := slot_map.at(&program.nodes, dup_addr)^
+	con_node := arena.at(&program.nodes, con_addr)^
+	dup_node := arena.at(&program.nodes, dup_addr)^
 
 	node_3 := create_node(program, dup.tag, {{tag = .VAR, data = x1}, {tag = .VAR, data = x3}})
 	node_4 := create_node(program, dup.tag, {{tag = .VAR, data = x2}, {tag = .VAR, data = x4}})
@@ -301,14 +334,21 @@ commute :: proc(program: ^Program, redex: Pair) {
 
 @(private = "file")
 create_var :: proc(program: ^Program) -> u32 {
-	key, ok := slot_map.insert(&program.vars, VARS_EMPTY)
+	return transmute(u32)Var_Data{addr = alloc_var(program, VARS_EMPTY)}
+}
+
+@(private = "file")
+alloc_var :: proc(program: ^Program, value: u32) -> int {
+	worker := cast(^Worker)context.user_ptr
+	index, ok := arena.alloc(&program.vars, &worker.vars, value)
 	if !ok do panic("var arena full")
-	return transmute(u32)Var_Data{addr = key.index}
+	return index
 }
 
 @(private = "file")
 delete_var :: proc(program: ^Program, addr: int) {
-	slot_map.free_at(&program.vars, addr)
+	worker := cast(^Worker)context.user_ptr
+	arena.free(&program.vars, &worker.vars, addr)
 }
 
 @(private = "file")
@@ -329,21 +369,24 @@ create_op :: proc(program: ^Program, type: Op_Type, pair: Pair) -> (port: Port) 
 
 @(private = "file")
 alloc_node :: proc(program: ^Program, pair: Pair) -> int {
-	key, ok := slot_map.insert(&program.nodes, pair)
+	worker := cast(^Worker)context.user_ptr
+	index, ok := arena.alloc(&program.nodes, &worker.nodes, pair)
 	if !ok do panic("node arena full")
-	return key.index
+	return index
 }
 
 @(private = "file")
 alloc_num :: proc(program: ^Program, value: u32) -> int {
-	key, ok := slot_map.insert(&program.nums, value)
+	worker := cast(^Worker)context.user_ptr
+	index, ok := arena.alloc(&program.nums, &worker.nums, value)
 	if !ok do panic("num arena full")
-	return key.index
+	return index
 }
 
 @(private = "file")
 delete_node :: proc(program: ^Program, addr: int) {
-	slot_map.free_at(&program.nodes, addr)
+	worker := cast(^Worker)context.user_ptr
+	arena.free(&program.nodes, &worker.nodes, addr)
 }
 
 @(private = "file")
@@ -364,7 +407,7 @@ erase :: proc(program: ^Program, redex: Pair) {
 	case .OPE:
 		addr = get_data(a).(Op_Data).addr
 	}
-	node := slot_map.at(&program.nodes, addr)^
+	node := arena.at(&program.nodes, addr)^
 
 	delete_node(program, addr)
 
@@ -385,7 +428,7 @@ copy_num :: #force_inline proc(program: ^Program, num: Port) -> (num_copy: Port)
 	data := get_data(num).(Num_Data)
 	addr := data.addr
 
-	val := slot_map.at(&program.nums, addr)^
+	val := arena.at(&program.nums, addr)^
 
 	num_copy = {
 		tag  = .NUM,
@@ -413,8 +456,8 @@ annihilate :: proc(program: ^Program, redex: Pair) {
 		panic("Commute failed")
 	}
 
-	node_a := slot_map.at(&program.nodes, address_a)^
-	node_b := slot_map.at(&program.nodes, address_b)^
+	node_a := arena.at(&program.nodes, address_a)^
+	node_b := arena.at(&program.nodes, address_b)^
 
 	#partial switch a.tag {
 	case .CON:
@@ -437,7 +480,8 @@ void :: proc(program: ^Program, redex: Pair) {
 
 @(private = "file")
 delete_num :: proc(program: ^Program, addr: int) {
-	slot_map.free_at(&program.nums, addr)
+	worker := cast(^Worker)context.user_ptr
+	arena.free(&program.nums, &worker.nums, addr)
 }
 
 @(private = "file")
@@ -497,7 +541,7 @@ vars_exchange :: proc(
 	bits := VARS_EMPTY
 	if port, ok := new_port.?; ok do bits = transmute(u32)port
 
-	old := sync.atomic_exchange(slot_map.at(&program.vars, addr), bits)
+	old := sync.atomic_exchange(arena.at(&program.vars, addr), bits)
 	if old == VARS_EMPTY do return nil
 
 	return transmute(Port)old
@@ -516,9 +560,7 @@ call :: proc(program: ^Program, redex: Pair) {
 	var_map := make([]int, def.vars)
 	defer delete(var_map)
 	for i in 0 ..< def.vars {
-		key, ok := slot_map.insert(&program.vars, VARS_EMPTY)
-		if !ok do panic("var arena full")
-		var_map[i] = key.index
+		var_map[i] = alloc_var(program, VARS_EMPTY)
 	}
 
 	node_map := make([]int, len(def.nodes))
@@ -560,7 +602,7 @@ call :: proc(program: ^Program, redex: Pair) {
 	for node, i in def.nodes {
 		left := adjust_addr(node.left, var_map, node_map, num_map)
 		right := adjust_addr(node.right, var_map, node_map, num_map)
-		slot_map.at(&program.nodes, node_map[i])^ = Pair{left, right}
+		arena.at(&program.nodes, node_map[i])^ = Pair{left, right}
 	}
 
 	for pair in def.redexes {
@@ -583,7 +625,7 @@ apply :: proc(program: ^Program, redex: Pair) {
 	if con.tag != .CON do swi_or_ope, con = con, swi_or_ope
 
 	addr_con := get_data(con).(Node_Data).addr
-	pair_con := slot_map.at(&program.nodes, addr_con)^
+	pair_con := arena.at(&program.nodes, addr_con)^
 
 	x1 := create_var(program)
 	x2 := create_var(program)
@@ -601,7 +643,7 @@ apply :: proc(program: ^Program, redex: Pair) {
 		swi := swi_or_ope
 
 		addr_swi := get_data(swi).(Node_Data).addr
-		pair_swi := slot_map.at(&program.nodes, addr_swi)^
+		pair_swi := arena.at(&program.nodes, addr_swi)^
 
 		node_swi1 := create_node(
 			program,
@@ -623,7 +665,7 @@ apply :: proc(program: ^Program, redex: Pair) {
 		type := get_data(ope).(Op_Data).type
 
 		addr_ope := get_data(ope).(Op_Data).addr
-		pair_ope := slot_map.at(&program.nodes, addr_ope)^
+		pair_ope := arena.at(&program.nodes, addr_ope)^
 
 		node_ope1 := create_op(program, type, {{tag = .VAR, data = x1}, {tag = .VAR, data = x3}})
 		node_ope2 := create_op(program, type, {{tag = .VAR, data = x2}, {tag = .VAR, data = x4}})
@@ -644,11 +686,11 @@ cond :: proc(program: ^Program, redex: Pair) {
 	if swi.tag != .SWI do swi, num = num, swi
 
 	addr_swi := get_data(swi).(Node_Data).addr
-	pair := slot_map.at(&program.nodes, addr_swi)^
+	pair := arena.at(&program.nodes, addr_swi)^
 
 	type := get_data(num).(Num_Data).type
 	addr_num := get_data(num).(Num_Data).addr
-	value := slot_map.at(&program.nums, addr_num)^
+	value := arena.at(&program.nums, addr_num)^
 
 	is_zero: bool
 	switch type {
@@ -704,7 +746,7 @@ operate :: proc(program: ^Program, redex: Pair) {
 	type := get_data(op).(Op_Data).type
 	addr := get_data(op).(Op_Data).addr
 
-	pair := slot_map.at(&program.nodes, addr)^
+	pair := arena.at(&program.nodes, addr)^
 
 	// swap rule: # ~ $(a, b) -> a ~ $(#, b)
 	if pair.left.tag != .NUM {
@@ -754,10 +796,10 @@ get_num_values :: proc(program: ^Program, a, b: Port) -> (Num_Value, Num_Value, 
 	}
 
 	addr_a := get_data(a).(Num_Data).addr
-	value_a := slot_map.at(&program.nums, addr_a)^
+	value_a := arena.at(&program.nums, addr_a)^
 
 	addr_b := get_data(b).(Num_Data).addr
-	value_b := slot_map.at(&program.nums, addr_b)^
+	value_b := arena.at(&program.nums, addr_b)^
 
 	switch struct {
 		a, b: Num_Type,
@@ -845,7 +887,7 @@ fmt_program :: proc "contextless" () {
 			case 'v':
 				fmt.wprintfln(fi.writer, "Program{{")
 
-				fmt.wprintfln(fi.writer, "\tNodes: %d", slot_map.len(&m.nodes))
+				fmt.wprintfln(fi.writer, "\tNodes: %d", arena.high_water(&m.nodes))
 
 				fmt.wprintfln(fi.writer, "\tRedexes:")
 
@@ -854,9 +896,9 @@ fmt_program :: proc "contextless" () {
 					fmt.wprintfln(fi.writer, "\t\t%4d:\t%v\t~\t%v", index, redex.left, redex.right)
 				}
 
-				fmt.wprintfln(fi.writer, "\tVars: %d", slot_map.len(&m.vars))
+				fmt.wprintfln(fi.writer, "\tVars: %d", arena.high_water(&m.vars))
 
-				fmt.wprintfln(fi.writer, "\tNums: %d", slot_map.len(&m.nums))
+				fmt.wprintfln(fi.writer, "\tNums: %d", arena.high_water(&m.nums))
 
 				fmt.wprintf(fi.writer, "}}")
 			case:
