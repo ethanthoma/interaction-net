@@ -1,3 +1,5 @@
+#+feature global-context
+
 package main
 
 import "core:fmt"

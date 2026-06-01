@@ -1,6 +1,6 @@
 package main
 
-import "core:encoding/ansi"
+import "core:terminal/ansi"
 import "core:fmt"
 import "core:os"
 import "core:path/filepath"
@@ -32,8 +32,8 @@ cmd_run :: proc(args: []string) {
 	}
 
 	filename := args[0]
-	data, ok := os.read_entire_file(filename)
-	if !ok {
+	data, read_err := os.read_entire_file(filename, context.allocator)
+	if read_err != nil {
 		error("Unable to read file '%s'\n", filename)
 	}
 	defer delete(data)
@@ -48,7 +48,7 @@ cmd_example :: proc(args: []string) {
 	}
 
 	name := args[0]
-	examples_dir := filepath.join({os.args[0], "../../examples"})
+	examples_dir, _ := filepath.join({os.args[0], "../../examples"})
 
 	fd, err := os.open(examples_dir)
 	if err != nil {
@@ -56,7 +56,7 @@ cmd_example :: proc(args: []string) {
 	}
 	defer os.close(fd)
 
-	file_info, read_err := os.read_dir(fd, 20)
+	file_info, read_err := os.read_dir(fd, 20, context.allocator)
 	if read_err != nil {
 		error("Failed to read examples dir")
 	}
@@ -65,8 +65,8 @@ cmd_example :: proc(args: []string) {
 	found := false
 	for fi in file_info {
 		if name == filepath.short_stem(fi.name) {
-			data, ok := os.read_entire_file(fi.fullpath)
-			if !ok {
+			data, file_err := os.read_entire_file(fi.fullpath, context.allocator)
+			if file_err != nil {
 				error("Unable to read file '%s'\n", fi.fullpath)
 			}
 			defer delete(data)
