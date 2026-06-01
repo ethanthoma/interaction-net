@@ -3,41 +3,45 @@ package slot_map
 import "base:builtin"
 import "base:runtime"
 import "core:mem"
+import "core:sync"
+import "shared:queue"
 
-DEFAULT_CAPACITY :: 16
+CACHE_LINE_SIZE :: 64
 
 Slot_Map :: struct($T: typeid) {
-	entries:   [dynamic]Entry(T),
-	free_list: [dynamic]u32,
-	len:       int,
+	entries:    [dynamic]Entry(T),
+	free_list:  queue.Queue(int),
+	len:        int,
+	_allocator: mem.Allocator,
 }
 
-Entry :: struct($T: typeid) {
-	generation: u32,
+Entry :: struct($T: typeid) #align (CACHE_LINE_SIZE) {
+	generation: int,
 	value:      T,
 }
 
 Key :: struct {
-	index:      u32,
-	generation: u32,
+	index:      int,
+	generation: int,
 }
 
 init :: proc(
 	sm: ^$S/Slot_Map($T),
-	capacity := DEFAULT_CAPACITY,
+	$capacity: int,
 	allocator := context.allocator,
 ) -> runtime.Allocator_Error {
 	sm.entries = make([dynamic]Entry(T), 0, capacity, allocator) or_return
-	sm.free_list = make([dynamic]u32, 0, capacity, allocator) or_return
+	queue.init(&sm.free_list, capacity, allocator) or_return
+	sm._allocator = allocator
 
-	sm.len = 0
+	sync.atomic_store(&sm.len, 0)
 
 	return nil
 }
 
 destroy :: proc(sm: ^$S/Slot_Map($T)) {
 	delete(sm.entries)
-	delete(sm.free_list)
+	queue.destroy(&sm.free_list)
 }
 
 len :: proc(sm: ^$S/Slot_Map($T)) -> int {
@@ -45,8 +49,8 @@ len :: proc(sm: ^$S/Slot_Map($T)) -> int {
 }
 
 insert :: proc(sm: ^$S/Slot_Map($T), value: T) -> Key {
-	if builtin.len(sm.free_list) > 0 {
-		index, ok := pop_safe(&sm.free_list)
+	if queue.len(&sm.free_list) > 0 {
+		index, ok := queue.pop(&sm.free_list)
 
 		if !ok {
 			return insert(sm, value)
@@ -58,7 +62,7 @@ insert :: proc(sm: ^$S/Slot_Map($T), value: T) -> Key {
 
 		return Key{index, sm.entries[index].generation}
 	} else {
-		index := u32(builtin.len(sm.entries))
+		index := int(builtin.len(sm.entries))
 
 		append(&sm.entries, Entry(T){0, value})
 		sm.len += 1
@@ -70,7 +74,7 @@ insert :: proc(sm: ^$S/Slot_Map($T), value: T) -> Key {
 remove :: proc(sm: ^$S/Slot_Map($T), key: Key) -> Maybe(T) {
 	if contains_key(sm, key) {
 		entry := sm.entries[key.index]
-		append(&sm.free_list, key.index)
+		queue.push(&sm.free_list, key.index)
 		sm.len -= 1
 		return entry.value
 	} else {
@@ -79,7 +83,7 @@ remove :: proc(sm: ^$S/Slot_Map($T), key: Key) -> Maybe(T) {
 }
 
 contains_key :: proc(sm: ^$S/Slot_Map($T), key: Key) -> bool {
-	if key.index >= u32(builtin.len(sm.entries)) {
+	if key.index >= int(builtin.len(sm.entries)) {
 		return false
 	}
 
