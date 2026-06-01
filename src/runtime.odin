@@ -38,9 +38,9 @@ DEQUE_CAP :: 1 << 16
 run :: proc(book: ^Book) {
 	ctx := Context{book, 0, time.Stopwatch{}}
 
-	NODE_CAP :: 1 << 20
-	VAR_CAP :: 1 << 20
-	NUM_CAP :: 1 << 18
+	NODE_CAP :: 1 << 23
+	VAR_CAP :: 1 << 24
+	NUM_CAP :: 1 << 22
 	REDEX_CAP :: 1 << 16
 
 	program: Program
