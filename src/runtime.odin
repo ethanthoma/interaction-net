@@ -309,10 +309,8 @@ annihilate :: proc(program: ^Program, redex: Pair) {
 
 @(private = "file")
 void :: proc(program: ^Program, redex: Pair) {
-	if redex.left.tag == .NUM {
-		delete_num(program, get_data(redex.left).(Num_Data).addr)
-		delete_num(program, get_data(redex.right).(Num_Data).addr)
-	}
+	if redex.left.tag == .NUM do delete_num(program, get_data(redex.left).(Num_Data).addr)
+	if redex.right.tag == .NUM do delete_num(program, get_data(redex.right).(Num_Data).addr)
 }
 
 @(private = "file")
