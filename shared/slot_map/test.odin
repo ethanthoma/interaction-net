@@ -12,7 +12,8 @@ test_insert_remove :: proc(t: ^testing.T) {
 	init(&sm, 16)
 	defer destroy(&sm)
 
-	k := insert(&sm, 42)
+	k, ok := insert(&sm, 42)
+	testing.expect(t, ok)
 	testing.expect(t, contains_key(&sm, k))
 	testing.expect(t, get(&sm, k).? == 42)
 	testing.expect(t, len(&sm) == 1)
@@ -28,16 +29,19 @@ test_insert_remove :: proc(t: ^testing.T) {
 
 @(test)
 test_generation_invalidates_key :: proc(t: ^testing.T) {
+	CAP :: 2
 	sm: Slot_Map(int)
-	init(&sm, 16)
+	init(&sm, CAP)
 	defer destroy(&sm)
 
-	k1 := insert(&sm, 1)
+	k1, _ := insert(&sm, 1)
 	remove(&sm, k1)
-	k2 := insert(&sm, 2)
+	insert(&sm, 2)
+	k2, ok := insert(&sm, 3)
+	testing.expect(t, ok)
 
-	testing.expect(t, k1.index == k2.index)
-	testing.expect(t, k1.generation != k2.generation)
+	testing.expect(t, k2.index == k1.index)
+	testing.expect(t, k2.generation != k1.generation)
 	testing.expect(t, !contains_key(&sm, k1))
 	testing.expect(t, contains_key(&sm, k2))
 }
@@ -64,7 +68,8 @@ test_property_model :: proc(t: ^testing.T) {
 			roll := rand.int_max(100, gen)
 			switch {
 			case builtin.len(live) == 0 || roll < 50:
-				k := insert(&sm, next)
+				k, ok := insert(&sm, next)
+				testing.expect(t, ok)
 				_, dup := model[k]
 				testing.expectf(t, !dup, "seed %d: insert returned live key %v", seed, k)
 				model[k] = next
@@ -151,7 +156,7 @@ test_swarm :: proc(t: ^testing.T) {
 
 			switch op {
 			case .Insert:
-				k := insert(&sm, next)
+				k, _ := insert(&sm, next)
 				model[k] = next
 				append(&live, k)
 				next += 1
@@ -182,16 +187,8 @@ test_swarm :: proc(t: ^testing.T) {
 	}
 }
 
-// known-bug demos, disabled by default; run with -define:SLOTMAP_STRESS=true
-@(private = "file")
-STRESS :: #config(SLOTMAP_STRESS, false)
-
 @(test)
 test_concurrent_insert :: proc(t: ^testing.T) {
-	when !STRESS {
-		return
-	}
-
 	NUM_THREADS :: 8
 	PER_THREAD :: 4000
 
@@ -206,24 +203,47 @@ test_concurrent_insert :: proc(t: ^testing.T) {
 	threads: [NUM_THREADS]^thread.Thread
 	for &th, id in threads do th = thread.create_and_start_with_poly_data2(&sm, id, worker)
 	for th in threads do thread.join(th)
+	for th in threads do thread.destroy(th)
 
 	testing.expectf(
 		t,
 		len(&sm) == NUM_THREADS * PER_THREAD,
-		"insert is not thread-safe: len %d != %d",
+		"concurrent inserts lost updates: len %d != %d",
 		len(&sm),
 		NUM_THREADS * PER_THREAD,
 	)
 }
 
 @(test)
-test_capacity_overflow :: proc(t: ^testing.T) {
-	when !STRESS {
-		return
+test_concurrent_churn :: proc(t: ^testing.T) {
+	NUM_THREADS :: 8
+	PER_THREAD :: 4000
+
+	sm: Slot_Map(int)
+	init(&sm, 1 << 16)
+	defer destroy(&sm)
+
+	worker :: proc(sm: ^Slot_Map(int), id: int) {
+		keys: [dynamic]Key
+		defer delete(keys)
+		for i in 0 ..< PER_THREAD {
+			if k, ok := insert(sm, id * PER_THREAD + i); ok do append(&keys, k)
+		}
+		for i := 0; i < builtin.len(keys); i += 2 do remove(sm, keys[i])
 	}
 
-	CAP :: 8
-	N :: 4 * CAP
+	threads: [NUM_THREADS]^thread.Thread
+	for &th, id in threads do th = thread.create_and_start_with_poly_data2(&sm, id, worker)
+	for th in threads do thread.join(th)
+	for th in threads do thread.destroy(th)
+
+	expected := NUM_THREADS * (PER_THREAD - (PER_THREAD + 1) / 2)
+	testing.expectf(t, len(&sm) == expected, "concurrent churn: len %d != %d", len(&sm), expected)
+}
+
+@(test)
+test_full_then_reuse :: proc(t: ^testing.T) {
+	CAP :: 16
 
 	sm: Slot_Map(int)
 	init(&sm, CAP)
@@ -231,16 +251,22 @@ test_capacity_overflow :: proc(t: ^testing.T) {
 
 	keys: [dynamic]Key
 	defer delete(keys)
-	for i in 0 ..< N do append(&keys, insert(&sm, i))
-	for k in keys do remove(&sm, k)
-	clear(&keys)
-	for i in 0 ..< N do append(&keys, insert(&sm, 100 + i))
+	for i in 0 ..< CAP {
+		k, ok := insert(&sm, i)
+		testing.expect(t, ok)
+		append(&keys, k)
+	}
 
-	testing.expectf(
-		t,
-		builtin.len(sm.entries) == N,
-		"free-list slot leak: entries grew to %d, expected %d",
-		builtin.len(sm.entries),
-		N,
-	)
+	_, overflow_ok := insert(&sm, 999)
+	testing.expect(t, !overflow_ok)
+	testing.expect(t, len(&sm) == CAP)
+
+	for k in keys do remove(&sm, k)
+	testing.expect(t, len(&sm) == 0)
+
+	for i in 0 ..< CAP {
+		_, ok := insert(&sm, 100 + i)
+		testing.expect(t, ok)
+	}
+	testing.expect(t, len(&sm) == CAP)
 }

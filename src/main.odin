@@ -1,7 +1,6 @@
 package main
 
 import "core:fmt"
-import "core:thread"
 import "shared:slot_map"
 
 main :: proc() {
@@ -10,7 +9,7 @@ main :: proc() {
 	s: slot_map.Slot_Map(int)
 	slot_map.init(&s, CAPACITY)
 
-	key := slot_map.insert(&s, 32)
+	key, ok := slot_map.insert(&s, 32)
 
-	fmt.println(s)
+	fmt.println(key, ok, s)
 }
