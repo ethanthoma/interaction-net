@@ -331,3 +331,63 @@ test_concurrent_double_remove :: proc(t: ^testing.T) {
 		seen[k.index] = true
 	}
 }
+
+@(private = "file")
+Wide :: struct {
+	v: [16]int,
+}
+
+@(private = "file")
+Get_Race :: struct {
+	sm:   ^Slot_Map(Wide),
+	idx:  int,
+	gen:  int,
+	torn: int,
+	stop: bool,
+}
+
+@(private = "file")
+get_writer :: proc(g: ^Get_Race) {
+	for round in 1 ..< 200000 {
+		w: Wide
+		for &e in w.v do e = round
+		if k, ok := insert(g.sm, w); ok {
+			sync.atomic_store(&g.idx, k.index)
+			sync.atomic_store(&g.gen, k.generation)
+			remove(g.sm, k)
+		}
+	}
+	sync.atomic_store(&g.stop, true)
+}
+
+@(private = "file")
+get_reader :: proc(g: ^Get_Race) {
+	for !sync.atomic_load(&g.stop) {
+		k := Key{sync.atomic_load(&g.idx), sync.atomic_load(&g.gen)}
+		if w, ok := get(g.sm, k).?; ok {
+			first := w.v[0]
+			for e in w.v do if e != first do sync.atomic_add(&g.torn, 1)
+		}
+	}
+}
+
+@(test)
+test_concurrent_get_during_remove :: proc(t: ^testing.T) {
+	sm: Slot_Map(Wide)
+	init(&sm, 4)
+	defer destroy(&sm)
+
+	g := Get_Race {
+		sm  = &sm,
+		gen = -1,
+	}
+
+	writer := thread.create_and_start_with_poly_data(&g, get_writer)
+	reader := thread.create_and_start_with_poly_data(&g, get_reader)
+	thread.join(writer)
+	thread.join(reader)
+	thread.destroy(writer)
+	thread.destroy(reader)
+
+	testing.expectf(t, g.torn == 0, "get returned %d torn values", g.torn)
+}

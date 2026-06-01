@@ -78,8 +78,14 @@ remove :: proc(sm: ^$S/Slot_Map($T), key: Key) -> Maybe(T) {
 }
 
 get :: proc(sm: ^$S/Slot_Map($T), key: Key) -> Maybe(T) {
-	if !contains_key(sm, key) do return nil
-	return sm.entries[key.index].value
+	if key.index < 0 || key.index >= builtin.len(sm.entries) do return nil
+
+	entry := &sm.entries[key.index]
+	if sync.atomic_load(&entry.generation) != key.generation do return nil
+	value := entry.value
+	if sync.atomic_load(&entry.generation) != key.generation do return nil
+
+	return value
 }
 
 contains_key :: proc(sm: ^$S/Slot_Map($T), key: Key) -> bool {
