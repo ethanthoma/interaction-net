@@ -83,6 +83,14 @@ remove :: proc(sm: ^$S/Slot_Map($T), key: Key) -> Maybe(T) {
 	}
 }
 
+get :: proc(sm: ^$S/Slot_Map($T), key: Key) -> Maybe(T) {
+	if contains_key(sm, key) {
+		return sm.entries[key.index].value
+	} else {
+		return nil
+	}
+}
+
 contains_key :: proc(sm: ^$S/Slot_Map($T), key: Key) -> bool {
 	if key.index >= int(builtin.len(sm.entries)) {
 		return false

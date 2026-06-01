@@ -14,11 +14,13 @@ test_insert_remove :: proc(t: ^testing.T) {
 
 	k := insert(&sm, 42)
 	testing.expect(t, contains_key(&sm, k))
+	testing.expect(t, get(&sm, k).? == 42)
 	testing.expect(t, len(&sm) == 1)
 
 	v := remove(&sm, k)
 	testing.expect(t, v != nil && v.? == 42)
 	testing.expect(t, !contains_key(&sm, k))
+	testing.expect(t, get(&sm, k) == nil)
 	testing.expect(t, len(&sm) == 0)
 
 	testing.expect(t, remove(&sm, k) == nil)
@@ -67,7 +69,7 @@ test_property_model :: proc(t: ^testing.T) {
 				testing.expectf(t, !dup, "seed %d: insert returned live key %v", seed, k)
 				model[k] = next
 				append(&live, k)
-				testing.expect(t, contains_key(&sm, k))
+				testing.expect(t, get(&sm, k).? == next)
 				next += 1
 			case roll < 85:
 				i := rand.int_max(builtin.len(live), gen)
@@ -102,6 +104,8 @@ test_property_model :: proc(t: ^testing.T) {
 				builtin.len(model),
 			)
 		}
+
+		for k, v in model do testing.expectf(t, get(&sm, k).? == v, "seed %d: get(%v) != %d", seed, k, v)
 	}
 }
 
@@ -173,8 +177,8 @@ test_swarm :: proc(t: ^testing.T) {
 			)
 		}
 
-		for k in live do testing.expect(t, contains_key(&sm, k))
-		for k in dead do testing.expect(t, !contains_key(&sm, k))
+		for k, v in model do testing.expect(t, get(&sm, k).? == v)
+		for k in dead do testing.expect(t, get(&sm, k) == nil)
 	}
 }
 
