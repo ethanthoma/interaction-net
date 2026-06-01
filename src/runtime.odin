@@ -2,6 +2,8 @@ package main
 
 import "base:runtime"
 import "core:fmt"
+import "core:math/rand"
+import "core:strings"
 import "core:time"
 import "shared:queue"
 
@@ -46,15 +48,72 @@ run :: proc(book: ^Book) {
 
 	time.stopwatch_start(&ctx.stopwatch)
 
-	for {
-		redex := queue.pop(&program.redexes) or_break
-		interact(&program, redex)
-	}
+	normalize(&program)
 
 	time.stopwatch_stop(&ctx.stopwatch)
 
 	print_time()
 	fmt.printfln("Result:\t%v", serialize(&program, book))
+}
+
+@(private = "file")
+normalize :: proc(program: ^Program) {
+	for {
+		redex := queue.pop(&program.redexes) or_break
+		interact(program, redex)
+	}
+}
+
+@(private = "file")
+normalize_shuffled :: proc(program: ^Program, seed: u64) {
+	state := rand.create(seed)
+	gen := runtime.default_random_generator(&state)
+
+	batch: [dynamic]Pair
+	defer delete(batch)
+
+	for {
+		clear(&batch)
+		for {
+			redex := queue.pop(&program.redexes) or_break
+			append(&batch, redex)
+		}
+		if len(batch) == 0 do break
+
+		rand.shuffle(batch[:], gen)
+		for redex in batch do interact(program, redex)
+	}
+}
+
+evaluate :: proc(book: ^Book, seed: Maybe(u64) = nil) -> string {
+	ctx := Context{book, 0, 0, time.Stopwatch{}}
+	context.user_ptr = &ctx
+
+	NODE_CAP :: 1 << 16
+	REDEX_CAP :: 1 << 14
+
+	program: Program = {
+		nodes = make([dynamic]Maybe(Pair), 0, NODE_CAP),
+		vars  = make([dynamic]Maybe(Port), 0, NODE_CAP),
+		nums  = make([dynamic]u32, 0, NODE_CAP),
+	}
+	queue.init(&program.redexes, REDEX_CAP)
+
+	defer delete(program.nodes)
+	defer delete(program.vars)
+	defer delete(program.nums)
+	defer queue.destroy(&program.redexes)
+
+	assign_at(&program.vars, int(ROOT), nil)
+	queue.push(&program.redexes, Pair{{tag = .REF, data = MAIN}, {tag = .VAR, data = ROOT}})
+
+	if s, ok := seed.?; ok {
+		normalize_shuffled(&program, s)
+	} else {
+		normalize(&program)
+	}
+
+	return strings.clone(serialize(&program, book))
 }
 
 @(private = "file")
