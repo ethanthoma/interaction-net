@@ -1,7 +1,6 @@
-#+feature global-context
-
 package main
 
+import "base:runtime"
 import "core:fmt"
 import "core:time"
 import "shared:queue"
@@ -402,18 +401,17 @@ call :: proc(program: ^Program, redex: Pair) {
 		case .VAR:
 			port.data = transmute(u32)Var_Data{addr = offsets[0] + get_data(port).(Var_Data).addr}
 		case .CON, .DUP, .SWI:
-			port.data =
-			transmute(u32)Node_Data{addr = offsets[1] + get_data(port).(Node_Data).addr}
+			port.data = transmute(u32)Node_Data {
+				addr = offsets[1] + get_data(port).(Node_Data).addr,
+			}
 		case .NUM:
-			port.data =
-			transmute(u32)Num_Data {
+			port.data = transmute(u32)Num_Data {
 				type = get_data(port).(Num_Data).type,
 				addr = offsets[2] + get_data(port).(Num_Data).addr,
 			}
 		case .ERA, .REF:
 		case .OPE:
-			port.data =
-			transmute(u32)Op_Data {
+			port.data = transmute(u32)Op_Data {
 				type = get_data(port).(Op_Data).type,
 				addr = offsets[1] + get_data(port).(Op_Data).addr,
 			}
@@ -696,7 +694,8 @@ div :: proc(a, b: Num_Value) -> u32 {
 }
 
 @(private = "file", init)
-fmt_program :: proc() {
+fmt_program :: proc "contextless" () {
+	context = runtime.default_context()
 	if fmt._user_formatters == nil do fmt.set_user_formatters(new(map[typeid]fmt.User_Formatter))
 
 	fmt.register_user_formatter(

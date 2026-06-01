@@ -1,7 +1,6 @@
-#+feature global-context
-
 package main
 
+import "base:runtime"
 import "core:fmt"
 
 Tag_Len :: 3
@@ -113,7 +112,8 @@ Pair :: struct {
 }
 
 @(private = "file", init)
-fmt_port :: proc() {
+fmt_port :: proc "contextless" () {
+	context = runtime.default_context()
 	if fmt._user_formatters == nil do fmt.set_user_formatters(new(map[typeid]fmt.User_Formatter))
 
 	fmt.register_user_formatter(

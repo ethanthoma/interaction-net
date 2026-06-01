@@ -1,7 +1,6 @@
-#+feature global-context
-
 package main
 
+import "base:runtime"
 import "core:fmt"
 
 Def :: struct {
@@ -176,7 +175,8 @@ generate_term :: proc(book: ^Book, def: ^Def, term: ^Term) -> (port: Port) {
 }
 
 @(private = "file", init)
-fmt_book :: proc() {
+fmt_book :: proc "contextless" () {
+	context = runtime.default_context()
 	if fmt._user_formatters == nil do fmt.set_user_formatters(new(map[typeid]fmt.User_Formatter))
 
 	fmt.register_user_formatter(
@@ -201,7 +201,8 @@ fmt_book :: proc() {
 }
 
 @(private = "file", init)
-fmt_def :: proc() {
+fmt_def :: proc "contextless" () {
+	context = runtime.default_context()
 	if fmt._user_formatters == nil do fmt.set_user_formatters(new(map[typeid]fmt.User_Formatter))
 
 	fmt.register_user_formatter(
