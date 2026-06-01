@@ -2,9 +2,10 @@ package main
 
 import "base:runtime"
 import "core:fmt"
-import "core:math/rand"
+import "core:os"
 import "core:strings"
 import "core:sync"
+import "core:thread"
 import "core:time"
 import "shared:queue"
 import "shared:slot_map"
@@ -17,22 +18,22 @@ MAIN: u32 : 0
 VARS_EMPTY: u32 : max(u32)
 
 Program :: struct {
-	nodes:   slot_map.Slot_Map(Pair),
-	redexes: queue.Queue(Pair),
-	vars:    slot_map.Slot_Map(u32),
-	nums:    slot_map.Slot_Map(u32),
+	nodes:       slot_map.Slot_Map(Pair),
+	redexes:     queue.Queue(Pair),
+	vars:        slot_map.Slot_Map(u32),
+	nums:        slot_map.Slot_Map(u32),
+	outstanding: int,
 }
 
 @(private = "file")
 Context :: struct {
-	book:             ^Book,
-	interactions:     int,
-	accumulated_time: int,
-	stopwatch:        time.Stopwatch,
+	book:         ^Book,
+	interactions: int,
+	stopwatch:    time.Stopwatch,
 }
 
 run :: proc(book: ^Book) {
-	ctx := Context{book, 0, 0, time.Stopwatch{}}
+	ctx := Context{book, 0, time.Stopwatch{}}
 	context.user_ptr = &ctx
 
 	NODE_CAP :: 1 << 20
@@ -52,11 +53,13 @@ run :: proc(book: ^Book) {
 	defer queue.destroy(&program.redexes)
 
 	slot_map.insert(&program.vars, VARS_EMPTY)
-	queue.push(&program.redexes, Pair{{tag = .REF, data = MAIN}, {tag = .VAR, data = ROOT}})
+	push_redex(&program, Pair{{tag = .REF, data = MAIN}, {tag = .VAR, data = ROOT}})
+
+	num_workers := max(os.get_processor_core_count(), 1)
 
 	time.stopwatch_start(&ctx.stopwatch)
 
-	normalize(&program)
+	normalize(&program, &ctx, num_workers)
 
 	time.stopwatch_stop(&ctx.stopwatch)
 
@@ -65,36 +68,62 @@ run :: proc(book: ^Book) {
 }
 
 @(private = "file")
-normalize :: proc(program: ^Program) {
-	for {
-		redex := queue.pop(&program.redexes) or_break
-		interact(program, redex)
-	}
+push_redex :: proc(program: ^Program, pair: Pair) {
+	sync.atomic_add(&program.outstanding, 1)
+	queue.push(&program.redexes, pair)
 }
 
 @(private = "file")
-normalize_shuffled :: proc(program: ^Program, seed: u64) {
-	state := rand.create(seed)
-	gen := runtime.default_random_generator(&state)
+Worker :: struct {
+	program: ^Program,
+	ctx:     ^Context,
+	id:      int,
+}
 
-	batch: [dynamic]Pair
-	defer delete(batch)
+@(private = "file")
+normalize :: proc(program: ^Program, ctx: ^Context, num_workers: int) {
+	workers := make([]Worker, num_workers)
+	threads := make([]^thread.Thread, num_workers)
+	defer delete(workers)
+	defer delete(threads)
+
+	for &worker, id in workers {
+		worker = Worker{program, ctx, id}
+		threads[id] = thread.create_and_start_with_poly_data(&worker, worker_loop)
+	}
+
+	for t in threads do thread.join(t)
+	for t in threads do thread.destroy(t)
+}
+
+@(private = "file")
+worker_loop :: proc(worker: ^Worker) {
+	context.user_ptr = worker.ctx
+	next_tick := 0
 
 	for {
-		clear(&batch)
-		for {
-			redex := queue.pop(&program.redexes) or_break
-			append(&batch, redex)
+		redex, ok := queue.pop(&worker.program.redexes)
+		if !ok {
+			if sync.atomic_load(&worker.program.outstanding) == 0 do return
+			thread.yield()
+			continue
 		}
-		if len(batch) == 0 do break
 
-		rand.shuffle(batch[:], gen)
-		for redex in batch do interact(program, redex)
+		interact(worker.program, redex)
+		sync.atomic_sub(&worker.program.outstanding, 1)
+
+		if worker.id == 0 {
+			seconds := int(time.duration_seconds(time.stopwatch_duration(worker.ctx.stopwatch)))
+			if seconds >= next_tick {
+				next_tick = seconds + 1
+				print_time()
+			}
+		}
 	}
 }
 
-evaluate :: proc(book: ^Book, seed: Maybe(u64) = nil) -> string {
-	ctx := Context{book, 0, 0, time.Stopwatch{}}
+evaluate :: proc(book: ^Book, num_workers := 1) -> string {
+	ctx := Context{book, 0, time.Stopwatch{}}
 	context.user_ptr = &ctx
 
 	NODE_CAP :: 1 << 16
@@ -112,22 +141,18 @@ evaluate :: proc(book: ^Book, seed: Maybe(u64) = nil) -> string {
 	defer queue.destroy(&program.redexes)
 
 	slot_map.insert(&program.vars, VARS_EMPTY)
-	queue.push(&program.redexes, Pair{{tag = .REF, data = MAIN}, {tag = .VAR, data = ROOT}})
+	push_redex(&program, Pair{{tag = .REF, data = MAIN}, {tag = .VAR, data = ROOT}})
 
-	if s, ok := seed.?; ok {
-		normalize_shuffled(&program, s)
-	} else {
-		normalize(&program)
-	}
+	normalize(&program, &ctx, num_workers)
 
 	return strings.clone(serialize(&program, book))
 }
 
 @(private = "file")
 print_time :: proc() {
-	timer := (cast(^Context)context.user_ptr).stopwatch
-	interactions := (cast(^Context)context.user_ptr).interactions
-	duration := time.stopwatch_duration(timer)
+	ctx := cast(^Context)context.user_ptr
+	interactions := sync.atomic_load(&ctx.interactions)
+	duration := time.stopwatch_duration(ctx.stopwatch)
 	seconds := time.duration_seconds(duration)
 
 	fmt.printfln("Interactions:\t%d", interactions)
@@ -176,18 +201,11 @@ interact :: proc(program: ^Program, redex: Pair) {
 		if a.tag == .REF && b == {tag = .VAR, data = ROOT} do call(program, redex)
 		else if a.tag == .VAR || b.tag == .VAR {
 			link(program, redex)
-			ctx.interactions -= 1
+			sync.atomic_sub(&ctx.interactions, 1)
 		} else do fmt.eprintfln("Missing rule for %v:%v", a.tag, b.tag)
 	}
 
-	ctx.interactions += 1
-
-	seconds := time.duration_seconds(time.stopwatch_duration(ctx.stopwatch))
-	if seconds - f64(ctx.accumulated_time) >= 1 {
-		for seconds - f64(ctx.accumulated_time) >= 1 do ctx.accumulated_time += 1
-
-		print_time()
-	}
+	sync.atomic_add(&ctx.interactions, 1)
 }
 
 @(private = "file")
@@ -384,7 +402,7 @@ link :: proc(program: ^Program, redex: Pair) {
 		}
 
 		if a.tag != .VAR {
-			queue.push(&program.redexes, Pair{a, b})
+			push_redex(program, Pair{a, b})
 			return
 		}
 

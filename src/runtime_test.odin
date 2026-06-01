@@ -42,21 +42,24 @@ test_runtime_confluence :: proc(t: ^testing.T) {
 		if !testing.expectf(t, ok, "compile failed: %q", src) do continue
 		defer delete_book(&book)
 
-		fifo := evaluate(&book)
-		defer delete(fifo)
+		serial := evaluate(&book, 1)
+		defer delete(serial)
 
-		for seed in u64(1) ..= 8 {
-			shuffled := evaluate(&book, seed)
-			defer delete(shuffled)
-			testing.expectf(
-				t,
-				fifo == shuffled,
-				"non-confluent %q: fifo=%q seed=%d -> %q",
-				src,
-				fifo,
-				seed,
-				shuffled,
-			)
+		WORKER_COUNTS :: [?]int{2, 4, 8}
+		for workers in WORKER_COUNTS {
+			for trial in 0 ..< 16 {
+				parallel := evaluate(&book, workers)
+				defer delete(parallel)
+				testing.expectf(
+					t,
+					serial == parallel,
+					"non-confluent %q: serial=%q workers=%d -> %q",
+					src,
+					serial,
+					workers,
+					parallel,
+				)
+			}
 		}
 	}
 }
