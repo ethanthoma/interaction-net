@@ -1,3 +1,20 @@
-.direnv/
-.envrc
-result
+*
+!*/
+
+!.gitignore
+!README.md
+
+# nix
+!*.nix
+!flake.lock
+
+# source
+!src/**/*.odin
+!shared/**/*.odin
+
+# examples
+!examples/*.inio
+
+# docs
+!docs/*.md
+!docs/*.ebnf
