@@ -7,6 +7,7 @@ import "core:strings"
 import "core:sync"
 import "core:thread"
 import "core:time"
+import "shared:deque"
 import "shared:queue"
 import "shared:slot_map"
 
@@ -32,9 +33,10 @@ Context :: struct {
 	stopwatch:    time.Stopwatch,
 }
 
+DEQUE_CAP :: 1 << 16
+
 run :: proc(book: ^Book) {
 	ctx := Context{book, 0, time.Stopwatch{}}
-	context.user_ptr = &ctx
 
 	NODE_CAP :: 1 << 20
 	VAR_CAP :: 1 << 20
@@ -53,7 +55,7 @@ run :: proc(book: ^Book) {
 	defer queue.destroy(&program.redexes)
 
 	slot_map.insert(&program.vars, VARS_EMPTY)
-	push_redex(&program, Pair{{tag = .REF, data = MAIN}, {tag = .VAR, data = ROOT}})
+	seed_redex(&program, Pair{{tag = .REF, data = MAIN}, {tag = .VAR, data = ROOT}})
 
 	num_workers := max(os.get_processor_core_count(), 1)
 
@@ -63,32 +65,49 @@ run :: proc(book: ^Book) {
 
 	time.stopwatch_stop(&ctx.stopwatch)
 
-	print_time()
+	print_time(&ctx)
 	fmt.printfln("Result:\t%v", serialize(&program, book))
+}
+
+@(private = "file")
+seed_redex :: proc(program: ^Program, pair: Pair) {
+	sync.atomic_add(&program.outstanding, 1)
+	queue.push(&program.redexes, pair)
 }
 
 @(private = "file")
 push_redex :: proc(program: ^Program, pair: Pair) {
 	sync.atomic_add(&program.outstanding, 1)
-	queue.push(&program.redexes, pair)
+	worker := cast(^Worker)context.user_ptr
+	if !deque.push(&worker.deques[worker.id], pair) {
+		queue.push(&program.redexes, pair)
+	}
 }
 
 @(private = "file")
 Worker :: struct {
 	program: ^Program,
 	ctx:     ^Context,
+	deques:  []deque.Deque(Pair),
 	id:      int,
 }
 
 @(private = "file")
 normalize :: proc(program: ^Program, ctx: ^Context, num_workers: int) {
+	deques := make([]deque.Deque(Pair), num_workers)
+	for &d in deques do deque.init(&d, DEQUE_CAP)
+	defer {
+		for &d in deques do deque.destroy(&d)
+		delete(deques)
+	}
+
 	workers := make([]Worker, num_workers)
 	threads := make([]^thread.Thread, num_workers)
 	defer delete(workers)
 	defer delete(threads)
 
 	for &worker, id in workers {
-		worker = Worker{program, ctx, id}
+		worker = Worker{program, ctx, deques, id}
 		threads[id] = thread.create_and_start_with_poly_data(&worker, worker_loop)
 	}
 
@@ -96,18 +115,25 @@ normalize :: proc(program: ^Program, ctx: ^Context, num_workers: int) {
 	for t in threads do thread.destroy(t)
 }
 
+SPIN_LIMIT :: 8
+YIELD_LIMIT :: 16
+
 @(private = "file")
 worker_loop :: proc(worker: ^Worker) {
-	context.user_ptr = worker.ctx
+	context.user_ptr = worker
+	own := &worker.deques[worker.id]
 	next_tick := 0
+	idle := 0
 
 	for {
-		redex, ok := queue.pop(&worker.program.redexes)
+		redex, ok := take_work(worker, own)
 		if !ok {
 			if sync.atomic_load(&worker.program.outstanding) == 0 do return
-			thread.yield()
+			backoff(idle)
+			idle += 1
 			continue
 		}
+		idle = 0
 
 		interact(worker.program, redex)
 		sync.atomic_sub(&worker.program.outstanding, 1)
@@ -116,15 +142,38 @@ worker_loop :: proc(worker: ^Worker) {
 			seconds := int(time.duration_seconds(time.stopwatch_duration(worker.ctx.stopwatch)))
 			if seconds >= next_tick {
 				next_tick = seconds + 1
-				print_time()
+				print_time(worker.ctx)
 			}
 		}
 	}
 }
 
+@(private = "file")
+backoff :: proc(idle: int) {
+	if idle < SPIN_LIMIT {
+		for _ in 0 ..< 1 << uint(idle) do sync.cpu_relax()
+	} else if idle < YIELD_LIMIT {
+		thread.yield()
+	} else {
+		time.sleep(100 * time.Microsecond)
+	}
+}
+
+@(private = "file")
+take_work :: proc(worker: ^Worker, own: ^deque.Deque(Pair)) -> (Pair, bool) {
+	if redex, ok := deque.pop(own); ok do return redex, true
+
+	n := len(worker.deques)
+	for offset in 1 ..< n {
+		victim := (worker.id + offset) % n
+		if redex, ok := deque.steal(&worker.deques[victim]); ok do return redex, true
+	}
+
+	return queue.pop(&worker.program.redexes)
+}
+
 evaluate :: proc(book: ^Book, num_workers := 1) -> string {
 	ctx := Context{book, 0, time.Stopwatch{}}
-	context.user_ptr = &ctx
 
 	NODE_CAP :: 1 << 16
 	REDEX_CAP :: 1 << 14
@@ -141,7 +190,7 @@ evaluate :: proc(book: ^Book, num_workers := 1) -> string {
 	defer queue.destroy(&program.redexes)
 
 	slot_map.insert(&program.vars, VARS_EMPTY)
-	push_redex(&program, Pair{{tag = .REF, data = MAIN}, {tag = .VAR, data = ROOT}})
+	seed_redex(&program, Pair{{tag = .REF, data = MAIN}, {tag = .VAR, data = ROOT}})
 
 	normalize(&program, &ctx, num_workers)
 
@@ -149,8 +198,7 @@ evaluate :: proc(book: ^Book, num_workers := 1) -> string {
 }
 
 @(private = "file")
-print_time :: proc() {
-	ctx := cast(^Context)context.user_ptr
+print_time :: proc(ctx: ^Context) {
 	interactions := sync.atomic_load(&ctx.interactions)
 	duration := time.stopwatch_duration(ctx.stopwatch)
 	seconds := time.duration_seconds(duration)
@@ -163,7 +211,7 @@ print_time :: proc() {
 @(private = "file")
 interact :: proc(program: ^Program, redex: Pair) {
 	a, b := redex.left, redex.right
-	ctx := cast(^Context)context.user_ptr
+	ctx := (cast(^Worker)context.user_ptr).ctx
 
 	if a.tag < b.tag do a, b = b, a
 
@@ -463,7 +511,7 @@ call :: proc(program: ^Program, redex: Pair) {
 
 	addr := get_data(a).(Ref_Data).addr
 
-	def := (cast(^Context)context.user_ptr).book.defs[addr]
+	def := (cast(^Worker)context.user_ptr).ctx.book.defs[addr]
 
 	var_map := make([]int, def.vars)
 	defer delete(var_map)
