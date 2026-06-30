@@ -4,16 +4,18 @@ This is simply a hobby project to learn Odinlang and interaction nets.
 
 Check [docs](./docs/) for list of things planned.
 
-The grammar is based on [HVM](https://github.com/HigherOrderCO/HVM) and their 
-[paper](https://higherorderco.com/)
+The grammar is based on [HVM](https://github.com/HigherOrderCO/HVM) and their
+[paper](https://github.com/HigherOrderCO/HVM2/blob/main/paper/HVM2.pdf)
 
 ## Running
 
 If you use nix and want to run an example, you can run
+
 ```
 nix run github:ethanthoma/interaction-net example <example-name>
 ```
-This will run one of the examples in [examples](./examples/) and print out its 
+
+This will run one of the examples in [examples](./examples/) and print out its
 contents.
 
 If you want to run your own file, you can simply run
@@ -22,9 +24,11 @@ If you want to run your own file, you can simply run
 nix run github:ethanthoma/interaction-net run <filename>
 ```
 
-Read the [grammar](./docs/grammar.ebnf) to make your own or simply copy an example.
+Read the [grammar](./docs/grammar.ebnf) to make your own or simply copy an
+example.
 
 ## Resources
+
 - https://arxiv.org/pdf/1505.07164
 - https://github.com/cicada-lang/inet
 - https://wiki.xxiivv.com/site/interaction_nets.html
