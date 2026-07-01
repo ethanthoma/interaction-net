@@ -13,8 +13,8 @@ odin build src -out:inio_p -collection:shared=shared -o:speed -define:PROFILE=tr
 ```
 
 `PROFILE` is a compile-time flag (`#config(PROFILE, false)` in
-`src/runtime.odin`); it adds an atomic per-rule counter and an end-of-run
-report, and compiles to nothing when unset.
+`src/runtime.odin`); it adds atomic per-rule and per-`nums`-arena counters plus a
+peak-footprint report, and compiles to nothing when unset.
 
 ## Baseline (2026-06-30)
 
@@ -35,17 +35,33 @@ Per-rule share (rec.inio):
 
 stress.inio: annihilate 25%, operate 25%, call/erase/void/cond 12.5% each.
 
-The hot path is annihilate + operaten. HVM-class CPU throughput is 2-3 orders of
-magnitude above this baseline, so the gap is architectural (probably?).
+## nums-arena traffic (2026-07-01)
 
-1. Inline numbers into the `Port` a la operate/cond/void hit the separate `nums`
-   arena on ~40% of interactions. Blocked on the 32-bit Port width (25-bit addr
-   can't hold a 32-bit value + type) which means it needs a wider Port/Pair
-   (should be fine?).
-2. Drop the 64-byte `Slot` cache-line padding (`shared/arena/arena.odin`) which
-   makes an 8-byte `Pair` occupies a whole line (added for cache contention),
-   ~8x memory bandwidth on annihilate. Needs per-worker packed arena segments to
-   stay false-sharing free.
-3. The single global atomic in `interact()` ping-pongs one cache line across all
-   workers on every interaction so we should have a per-worker interaction
-   counter.
+Per-interaction `nums`-arena touches and peak live footprint (physical, since
+each `u32` sits in a 64-byte `Slot`):
+
+| example     | touches/int | alloc+free/int | peak values | physical |
+| ----------- | ----------- | -------------- | ----------- | -------- |
+| rec.inio    | 1.32        | 1.68           | 126,302     | 8.08 MB  |
+| stress.inio | 1.50        | 1.00           | 4,348       | 278 KB   |
+
+The reads are real, but the allocation churn is the surprise: alloc ≈ free ≈
+interactions, so on average every interaction does one num alloc and one num free
+(free-list push/pop). The peak footprint is not cache-resident — but that is the
+64-byte `Slot` padding, not the boxing: packed to 4 bytes, rec's num set is
+~505 KB and stress's is ~17 KB (L1).
+
+The hot path is annihilate + operate. HVM-class CPU throughput is 2-3 orders of
+magnitude above this baseline, so the gap is architectural. Levers, in order:
+
+1. Drop the 64-byte `Slot` cache-line padding (`shared/arena/arena.odin`). It is
+   the dominant memory problem and hits *every* arena: an 8-byte `Pair` and a
+   4-byte num each burn a full line (8x / 16x blowup) — it alone makes rec's num
+   set 8 MB. Needs per-worker packed arena segments to stay false-sharing free.
+2. Per-worker interaction counter — DONE. Was a single global atomic in
+   `interact()` ping-ponging one line across all workers every interaction.
+3. Inline numbers into the `Port`. Measured 1.32 arena touches + 1.68 alloc/free
+   ops per interaction, so not a wash — but it needs a wider u64 `Port`, doubling
+   every `Pair` (annihilate, 32%, pays 2x on 100% of interactions), and packing
+   (#1) already shrinks the num arena 16x. Re-measure after packing; the marginal
+   win may not clear the u64 cost.

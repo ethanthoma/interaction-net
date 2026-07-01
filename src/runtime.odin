@@ -31,9 +31,18 @@ Rule :: enum u8 {
 	Operate,
 }
 
+Num_Event :: enum u8 {
+	Read,
+	Alloc,
+	Free,
+}
+
 when PROFILE {
 	@(private = "file")
 	prof_counts: [Rule]int
+
+	@(private = "file")
+	prof_num_counts: [Num_Event]int
 
 	@(private = "file")
 	prof_count :: proc(rule: Rule) {
@@ -41,13 +50,27 @@ when PROFILE {
 	}
 
 	@(private = "file")
-	prof_report :: proc() {
+	prof_num :: proc(event: Num_Event) {
+		sync.atomic_add(&prof_num_counts[event], 1)
+	}
+
+	@(private = "file")
+	prof_report :: proc(program: ^Program) {
 		total := 0
 		for count in prof_counts do total += count
 		for count, rule in prof_counts {
 			share := 100 * f64(count) / f64(max(total, 1))
 			fmt.printfln("Rule %-11v %d  (%.1f%%)", rule, count, share)
 		}
+
+		num_touches := 0
+		for count in prof_num_counts do num_touches += count
+		slots := arena.high_water(&program.nums)
+		fmt.printfln("Nums %-11v %d  (%.2f/interaction)", "touches", num_touches, f64(num_touches) / f64(max(total, 1)))
+		for count, event in prof_num_counts {
+			fmt.printfln("Nums %-11v %d", event, count)
+		}
+		fmt.printfln("Nums %-11v %d values, %d bytes physical (%dB slots)", "peak", slots, slots * size_of(arena.Slot(u32)), size_of(arena.Slot(u32)))
 	}
 }
 
@@ -101,7 +124,7 @@ run :: proc(book: ^Book) {
 
 	print_time(&ctx)
 
-	when PROFILE do prof_report()
+	when PROFILE do prof_report(&program)
 
 	serialize_worker := Worker {
 		program = &program,
@@ -429,6 +452,7 @@ alloc_node :: proc(program: ^Program, pair: Pair) -> int {
 
 @(private = "file")
 alloc_num :: proc(program: ^Program, value: u32) -> int {
+	when PROFILE do prof_num(.Alloc)
 	worker := cast(^Worker)context.user_ptr
 	index, ok := arena.alloc(&program.nums, &worker.nums, value)
 	if !ok do panic("num arena full")
@@ -481,6 +505,7 @@ copy_num :: #force_inline proc(program: ^Program, num: Port) -> (num_copy: Port)
 	data := get_data(num).(Num_Data)
 	addr := data.addr
 
+	when PROFILE do prof_num(.Read)
 	val := arena.at(&program.nums, addr)^
 
 	num_copy = {
@@ -535,6 +560,7 @@ void :: proc(program: ^Program, redex: Pair) {
 
 @(private = "file")
 delete_num :: proc(program: ^Program, addr: int) {
+	when PROFILE do prof_num(.Free)
 	worker := cast(^Worker)context.user_ptr
 	arena.free(&program.nums, &worker.nums, addr)
 }
@@ -748,6 +774,7 @@ cond :: proc(program: ^Program, redex: Pair) {
 
 	type := get_data(num).(Num_Data).type
 	addr_num := get_data(num).(Num_Data).addr
+	when PROFILE do prof_num(.Read)
 	value := arena.at(&program.nums, addr_num)^
 
 	is_zero: bool
@@ -855,9 +882,11 @@ get_num_values :: proc(program: ^Program, a, b: Port) -> (Num_Value, Num_Value, 
 	}
 
 	addr_a := get_data(a).(Num_Data).addr
+	when PROFILE do prof_num(.Read)
 	value_a := arena.at(&program.nums, addr_a)^
 
 	addr_b := get_data(b).(Num_Data).addr
+	when PROFILE do prof_num(.Read)
 	value_b := arena.at(&program.nums, addr_b)^
 
 	switch struct {
