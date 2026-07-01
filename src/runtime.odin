@@ -64,12 +64,13 @@ Context :: struct {
 	book:         ^Book,
 	interactions: int,
 	stopwatch:    time.Stopwatch,
+	workers:      []Worker,
 }
 
 DEQUE_CAP :: 1 << 16
 
 run :: proc(book: ^Book) {
-	ctx := Context{book, 0, time.Stopwatch{}}
+	ctx := Context{book, 0, time.Stopwatch{}, nil}
 
 	NODE_CAP :: 1 << 23
 	VAR_CAP :: 1 << 24
@@ -135,13 +136,14 @@ push_redex :: proc(program: ^Program, pair: Pair) {
 
 @(private = "file")
 Worker :: struct #align (arena.CACHE_LINE_SIZE) {
-	program: ^Program,
-	ctx:     ^Context,
-	deques:  []deque.Deque(Pair),
-	id:      int,
-	nodes:   arena.Cache,
-	vars:    arena.Cache,
-	nums:    arena.Cache,
+	program:      ^Program,
+	ctx:          ^Context,
+	deques:       []deque.Deque(Pair),
+	id:           int,
+	interactions: int,
+	nodes:        arena.Cache,
+	vars:         arena.Cache,
+	nums:         arena.Cache,
 }
 
 @(private = "file")
@@ -158,6 +160,8 @@ normalize :: proc(program: ^Program, ctx: ^Context, num_workers: int) {
 	defer delete(workers)
 	defer delete(threads)
 
+	ctx.workers = workers
+
 	for &worker, id in workers {
 		worker = Worker {
 			program = program,
@@ -169,6 +173,11 @@ normalize :: proc(program: ^Program, ctx: ^Context, num_workers: int) {
 	}
 
 	for t in threads do thread.join(t)
+
+	ctx.interactions = 0
+	for &worker in workers do ctx.interactions += worker.interactions
+	ctx.workers = nil
+
 	for &worker in workers {
 		arena.cache_destroy(&worker.nodes)
 		arena.cache_destroy(&worker.vars)
@@ -235,7 +244,7 @@ take_work :: proc(worker: ^Worker, own: ^deque.Deque(Pair)) -> (Pair, bool) {
 }
 
 evaluate :: proc(book: ^Book, num_workers := 1) -> string {
-	ctx := Context{book, 0, time.Stopwatch{}}
+	ctx := Context{book, 0, time.Stopwatch{}, nil}
 
 	NODE_CAP :: 1 << 16
 	REDEX_CAP :: 1 << 14
@@ -266,8 +275,16 @@ evaluate :: proc(book: ^Book, num_workers := 1) -> string {
 }
 
 @(private = "file")
+total_interactions :: proc(ctx: ^Context) -> int {
+	if ctx.workers == nil do return ctx.interactions
+	total := 0
+	for &worker in ctx.workers do total += worker.interactions
+	return total
+}
+
+@(private = "file")
 print_time :: proc(ctx: ^Context) {
-	interactions := sync.atomic_load(&ctx.interactions)
+	interactions := total_interactions(ctx)
 	duration := time.stopwatch_duration(ctx.stopwatch)
 	seconds := time.duration_seconds(duration)
 
@@ -279,7 +296,7 @@ print_time :: proc(ctx: ^Context) {
 @(private = "file")
 interact :: proc(program: ^Program, redex: Pair) {
 	a, b := redex.left, redex.right
-	ctx := (cast(^Worker)context.user_ptr).ctx
+	worker := cast(^Worker)context.user_ptr
 
 	if a.tag < b.tag do a, b = b, a
 
@@ -316,11 +333,11 @@ interact :: proc(program: ^Program, redex: Pair) {
 		if a.tag == .REF && b == {tag = .VAR, data = ROOT} do call(program, redex)
 		else if a.tag == .VAR || b.tag == .VAR {
 			link(program, redex)
-			sync.atomic_sub(&ctx.interactions, 1)
+			worker.interactions -= 1
 		} else do fmt.eprintfln("Missing rule for %v:%v", a.tag, b.tag)
 	}
 
-	sync.atomic_add(&ctx.interactions, 1)
+	worker.interactions += 1
 }
 
 @(private = "file")
