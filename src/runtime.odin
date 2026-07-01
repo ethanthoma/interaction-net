@@ -18,6 +18,39 @@ MAIN: u32 : 0
 
 VARS_EMPTY: u32 : max(u32)
 
+PROFILE :: #config(PROFILE, false)
+
+Rule :: enum u8 {
+	Commute,
+	Erase,
+	Annihilate,
+	Void,
+	Call,
+	Apply,
+	Cond,
+	Operate,
+}
+
+when PROFILE {
+	@(private = "file")
+	prof_counts: [Rule]int
+
+	@(private = "file")
+	prof_count :: proc(rule: Rule) {
+		sync.atomic_add(&prof_counts[rule], 1)
+	}
+
+	@(private = "file")
+	prof_report :: proc() {
+		total := 0
+		for count in prof_counts do total += count
+		for count, rule in prof_counts {
+			share := 100 * f64(count) / f64(max(total, 1))
+			fmt.printfln("Rule %-11v %d  (%.1f%%)", rule, count, share)
+		}
+	}
+}
+
 Program :: struct {
 	nodes:       arena.Arena(Pair),
 	redexes:     queue.Queue(Pair),
@@ -66,6 +99,8 @@ run :: proc(book: ^Book) {
 	time.stopwatch_stop(&ctx.stopwatch)
 
 	print_time(&ctx)
+
+	when PROFILE do prof_report()
 
 	serialize_worker := Worker {
 		program = &program,
@@ -276,8 +311,7 @@ interact :: proc(program: ^Program, redex: Pair) {
 	case {.OPE, .NUM}:
 		operate(program, redex)
 	case {.SWI, .OPE}:
-		fmt.printfln("SWI:OPE")
-		fmt.println(program, redex)
+		panic("undefined interaction: SWI~OPE")
 	case:
 		if a.tag == .REF && b == {tag = .VAR, data = ROOT} do call(program, redex)
 		else if a.tag == .VAR || b.tag == .VAR {
@@ -291,6 +325,7 @@ interact :: proc(program: ^Program, redex: Pair) {
 
 @(private = "file")
 commute :: proc(program: ^Program, redex: Pair) {
+	when PROFILE do prof_count(.Commute)
 	con, dup := redex.left, redex.right
 	if con.tag == .DUP do con, dup = dup, con
 
@@ -391,6 +426,7 @@ delete_node :: proc(program: ^Program, addr: int) {
 
 @(private = "file")
 erase :: proc(program: ^Program, redex: Pair) {
+	when PROFILE do prof_count(.Erase)
 	a, b := redex.left, redex.right
 
 	#partial switch a.tag {
@@ -440,6 +476,7 @@ copy_num :: #force_inline proc(program: ^Program, num: Port) -> (num_copy: Port)
 
 @(private = "file")
 annihilate :: proc(program: ^Program, redex: Pair) {
+	when PROFILE do prof_count(.Annihilate)
 	a, b := redex.left, redex.right
 
 	address_a: int
@@ -474,6 +511,7 @@ annihilate :: proc(program: ^Program, redex: Pair) {
 
 @(private = "file")
 void :: proc(program: ^Program, redex: Pair) {
+	when PROFILE do prof_count(.Void)
 	if redex.left.tag == .NUM do delete_num(program, get_data(redex.left).(Num_Data).addr)
 	if redex.right.tag == .NUM do delete_num(program, get_data(redex.right).(Num_Data).addr)
 }
@@ -549,6 +587,7 @@ vars_exchange :: proc(
 
 @(private = "file")
 call :: proc(program: ^Program, redex: Pair) {
+	when PROFILE do prof_count(.Call)
 	a, b := redex.left, redex.right
 
 	if a.tag != .REF do a, b = b, a
@@ -620,6 +659,7 @@ call :: proc(program: ^Program, redex: Pair) {
 
 @(private = "file")
 apply :: proc(program: ^Program, redex: Pair) {
+	when PROFILE do prof_count(.Apply)
 	swi_or_ope, con := redex.left, redex.right
 
 	if con.tag != .CON do swi_or_ope, con = con, swi_or_ope
@@ -681,6 +721,7 @@ apply :: proc(program: ^Program, redex: Pair) {
 
 @(private = "file")
 cond :: proc(program: ^Program, redex: Pair) {
+	when PROFILE do prof_count(.Cond)
 	swi, num := redex.left, redex.right
 
 	if swi.tag != .SWI do swi, num = num, swi
@@ -739,6 +780,7 @@ cond :: proc(program: ^Program, redex: Pair) {
 // TODO: handle case where left is not a num
 @(private = "file")
 operate :: proc(program: ^Program, redex: Pair) {
+	when PROFILE do prof_count(.Operate)
 	op, num := redex.left, redex.right
 
 	if op.tag != .OPE do op, num = num, op

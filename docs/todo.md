@@ -2,16 +2,25 @@
 
 ## runtime
 
-- delete numbers
-- deleted nodes leave buffer holes, we fill those holes when we run out of
-  buffer capacity via a linear scan which is fine when the hole is within the
-  first 10_000 or so. We should probably have a free list or some tree structure
-  for deleted nodes past 10_000 or so indices.
-- this a multithreaded paradigm without any multithreading...
-  - implement slotmap instead of flat buffer for nodes
-    - should be concurrent safe
+Reduction is memory-bandwidth bound; profile before optimizing. Build with
+`-define:PROFILE=true` for a per-rule interaction breakdown. Baseline numbers
+and the measured hot path live in [perf-baseline.md](./perf-baseline.md).
+
+Measured priorities (rec.inio / stress.inio): the hot rules are annihilate
+(~26-32%) and operate (~21-25%) and call/def-expansion is only ~10-12%.
+
+- inline numbers into the Port to drop the nums arena (operate/cond/void touch
+  it on ~40% of interactions) which is blocked on the 32-bit Port width, needs a
+  wider Port/Pair
+- kill the 64-byte `Slot` cache-line padding (arena.odin) which needs per-worker
+  packed arena segments to stay false-sharing free
+- make the global interaction counter per-worker (runtime.odin `interact`) to
+  stop cache-line ping-pong across workers
+
+Open design work:
+
 - gamma-operation and gamma-switch both use apply, the interaction between
-  switch and operation is undefined (what should the semantic meaning be?)
+  switch and operation is undefined and now panics. Decide the real semantics.
   - idk if the apply operation makes sense. It feels semantically correct for
     constructions of lists but DUP can emulate this builtin, ig this is why we
     use it in apply?
@@ -19,14 +28,11 @@
   - the OPE-CON is commution in HVM. Here we use apply like we do with SWI
   - the apply interaction generates DUP nodes which makes them unsafe for high
     order functions?
-- empty nodes are represented by maybe(pair), this is bad as maybe adds 4 extra
-  bytes, messing up the ideal 8 byte alignment for our vectors, swap it to a
-  special address space (nullptr)
 - copying from book (our list of definitions) into the program is too taxing as
   we have to adjust every address
-  - numbers can just be buffer copied
-  - addresses have to be updated for the nums and operations buffer. I feel
-    there must be a way to use simd for this
+  - reuse per-worker scratch maps instead of make/delete per call() first
+  - reserve a contiguous arena range per def so remap becomes base + i
+  - numbers can just be buffer copied once packed/inlined
 - annihilate for gamma should probably be its own rule called destruction as it
   is used for function application and deconstructing constructions
   - look into polarity
