@@ -99,9 +99,25 @@ cores), and the global queue is unused (0%, overflow 0) — so the MPMC queue is
 the problem; the single `outstanding` counter is, and the per-miss load dominates
 its add/sub traffic.
 
-Next lever: termination detection that does not touch a shared line on every idle
-spin — quiescence/idle-worker detection so the shared touch happens only on
-active↔idle transitions, not per redex and not per spin. Levers, in order:
+Fix landed: only load `outstanding` in the deep-idle path, not on every busy-spin
+(`outstanding == 0` is a stable terminal state, reachable only once all workers
+are quiescent, so busy-spinning workers never need to check it). Interleaved A/B
+on rec: +8.3% at 24 workers (2.57 → 2.78 MIps), +4.5% at 4 workers — larger where
+more idle workers were spinning, as predicted. It does not cure the anti-scaling
+(rec still peaks at 4 workers): what remains is the per-redex `atomic_add`/`sub`
+on `outstanding` (2 per interaction, still contended) and rec's structural
+parallelism deficit (68% miss — not enough independent redexes to feed 24 cores).
+
+Remaining coordination levers:
+- Remove the per-redex `outstanding` add/sub via quiescence/idle-worker
+  termination detection (shared touch only on active↔idle transitions). Bigger,
+  bug-prone concurrency change; measure whether the add/sub is still limiting
+  first.
+- More-parallel benchmarks: rec is a recursion with limited exposed parallelism;
+  goal-1 scaling needs workloads (and possibly eager expansion) that keep >4
+  workers fed. The 68% miss is a workload property, not just a coordination bug.
+
+Older levers, in order:
 
 1. Pack the `nums` arena (align 4B) — DONE. Footprint 8.08 MB → 502 KB peak
    (16x). Throughput on rec is unchanged (packed vs padded A/B: median 2.78 vs

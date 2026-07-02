@@ -258,7 +258,13 @@ worker_loop :: proc(worker: ^Worker) {
 	for {
 		redex, ok := take_work(worker, own)
 		if !ok {
-			if sync.atomic_load(&worker.program.outstanding) == 0 do return
+			// outstanding == 0 is a stable terminal state, only reachable once
+			// every worker is quiescent, so only the deep-idle path needs to load
+			// the shared counter. Checking it on every busy-spin is what makes the
+			// runtime anti-scale (idle workers ping-pong the line against active ones).
+			if idle >= YIELD_LIMIT && sync.atomic_load(&worker.program.outstanding) == 0 {
+				return
+			}
 			backoff(idle)
 			idle += 1
 			continue
