@@ -38,12 +38,26 @@ Num_Event :: enum u8 {
 	Free,
 }
 
+// Where a worker's take_work found its next redex, or Miss when it found none
+// and fell into backoff. Confirms whether the runtime anti-scales because idle
+// workers are starved and spinning (hammering the global `outstanding` load).
+Coord_Event :: enum u8 {
+	Own,
+	Steal,
+	Global,
+	Miss,
+	Overflow,
+}
+
 when PROFILE {
 	@(private = "file")
 	prof_counts: [Rule]int
 
 	@(private = "file")
 	prof_num_counts: [Num_Event]int
+
+	@(private = "file")
+	prof_coord_total: [Coord_Event]int
 
 	@(private = "file")
 	prof_count :: proc(rule: Rule) {
@@ -73,6 +87,13 @@ when PROFILE {
 		}
 		slot_bytes := size_of(arena.Slot(u32, align_of(u32)))
 		fmt.printfln("Nums %-11v %d values, %d bytes physical (%dB slots)", "peak", slots, slots * slot_bytes, slot_bytes)
+
+		takes := 0
+		for count in prof_coord_total do takes += count
+		for count, event in prof_coord_total {
+			share := 100 * f64(count) / f64(max(takes, 1))
+			fmt.printfln("Work %-11v %d  (%.1f%%)", event, count, share)
+		}
 	}
 }
 
@@ -160,6 +181,7 @@ push_redex :: proc(program: ^Program, pair: Pair) {
 	sync.atomic_add(&program.outstanding, 1)
 	worker := cast(^Worker)context.user_ptr
 	if !deque.push(&worker.deques[worker.id], pair) {
+		when PROFILE do worker.coord[.Overflow] += 1
 		queue.push(&program.redexes, pair)
 	}
 }
@@ -171,6 +193,7 @@ Worker :: struct #align (arena.CACHE_LINE_SIZE) {
 	deques:       []deque.Deque(Pair),
 	id:           int,
 	interactions: int,
+	coord:        [Coord_Event]int,
 	nodes:        arena.Cache,
 	vars:         arena.Cache,
 	nums:         arena.Cache,
@@ -207,6 +230,12 @@ normalize :: proc(program: ^Program, ctx: ^Context, num_workers: int) {
 	ctx.interactions = 0
 	for &worker in workers do ctx.interactions += worker.interactions
 	ctx.workers = nil
+
+	when PROFILE {
+		for &worker in workers {
+			for count, event in worker.coord do prof_coord_total[event] += count
+		}
+	}
 
 	for &worker in workers {
 		arena.cache_destroy(&worker.nodes)
@@ -262,15 +291,27 @@ backoff :: proc(idle: int) {
 
 @(private = "file")
 take_work :: proc(worker: ^Worker, own: ^deque.Deque(Pair)) -> (Pair, bool) {
-	if redex, ok := deque.pop(own); ok do return redex, true
+	if redex, ok := deque.pop(own); ok {
+		when PROFILE do worker.coord[.Own] += 1
+		return redex, true
+	}
 
 	n := len(worker.deques)
 	for offset in 1 ..< n {
 		victim := (worker.id + offset) % n
-		if redex, ok := deque.steal(&worker.deques[victim]); ok do return redex, true
+		if redex, ok := deque.steal(&worker.deques[victim]); ok {
+			when PROFILE do worker.coord[.Steal] += 1
+			return redex, true
+		}
 	}
 
-	return queue.pop(&worker.program.redexes)
+	if redex, ok := queue.pop(&worker.program.redexes); ok {
+		when PROFILE do worker.coord[.Global] += 1
+		return redex, true
+	}
+
+	when PROFILE do worker.coord[.Miss] += 1
+	return {}, false
 }
 
 evaluate :: proc(book: ^Book, num_workers := 1) -> string {

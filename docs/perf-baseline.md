@@ -80,19 +80,28 @@ median of 3:
 The runtime peaks at 2-4 workers (~2.5x) then REGRESSES as cores are added —
 using all 24 cores is slower than using 2. This is the goal-1 bottleneck:
 HVM-class runtimes scale near-linearly. Coordination overhead dominates past 4
-cores. Prime suspects, hottest first:
+cores.
 
-1. The global `outstanding` atomic (`runtime.odin`) — `atomic_add` on every
-   `push_redex` and `atomic_sub` on every completed interaction, one shared line
-   ping-ponging across all workers. Touched ~2x per interaction; the most likely
-   scaling killer. (The interaction counter was already made per-worker for this
-   reason; `outstanding` is hotter and still global.)
-2. The global overflow/fallback queue (`program.redexes`, MPMC) — contention when
-   deques overflow or workers fall back to it.
-3. Deque steal contention + idle backoff spinning.
+Confirmed via `Work` counters (`-define:PROFILE=true`, take_work outcome mix):
 
-Next lever: cut coordination contention, starting with termination detection so
-it does not need a single global counter. Levers, in order:
+| workers | own | steal | global | miss (spin) |
+| ------- | --- | ----- | ------ | ----------- |
+| 1       | 100%| 0%    | 0%     | 0%          |
+| 4       | 32% | 18%   | 0%     | 50%         |
+| 24      | 17% | 15%   | 0%     | 68%         |
+
+The miss ratio climbs with core count (0 → 50 → 68%): at 24 workers ~5M of ~7.3M
+take_work calls find no work and fall into backoff, and EVERY miss does
+`atomic_load(&outstanding)` on the shared line — 5M contended loads that grow with
+worker count and fight the active workers' add/sub. That is the anti-scaling
+mechanism. Steal is 15-18% (real parallelism exists, just not enough to feed 24
+cores), and the global queue is unused (0%, overflow 0) — so the MPMC queue is NOT
+the problem; the single `outstanding` counter is, and the per-miss load dominates
+its add/sub traffic.
+
+Next lever: termination detection that does not touch a shared line on every idle
+spin — quiescence/idle-worker detection so the shared touch happens only on
+active↔idle transitions, not per redex and not per spin. Levers, in order:
 
 1. Pack the `nums` arena (align 4B) — DONE. Footprint 8.08 MB → 502 KB peak
    (16x). Throughput on rec is unchanged (packed vs padded A/B: median 2.78 vs
