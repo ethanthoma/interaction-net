@@ -135,7 +135,7 @@ run :: proc(book: ^Book) {
 	defer queue.destroy(&program.redexes)
 
 	seed_root(&program)
-	seed_redex(&program, Pair{{tag = .REF, data = MAIN}, {tag = .VAR, data = ROOT}})
+	seed_redex(&program, Pair{make_port(.REF, MAIN), make_port(.VAR, ROOT)})
 
 	num_workers := max(os.get_processor_core_count(), 1)
 	if env := os.get_env("INIO_WORKERS", context.temp_allocator); env != "" {
@@ -338,7 +338,7 @@ evaluate :: proc(book: ^Book, num_workers := 1) -> string {
 	defer queue.destroy(&program.redexes)
 
 	seed_root(&program)
-	seed_redex(&program, Pair{{tag = .REF, data = MAIN}, {tag = .VAR, data = ROOT}})
+	seed_redex(&program, Pair{make_port(.REF, MAIN), make_port(.VAR, ROOT)})
 
 	normalize(&program, &ctx, num_workers)
 
@@ -375,12 +375,16 @@ interact :: proc(program: ^Program, redex: Pair) {
 	a, b := redex.left, redex.right
 	worker := cast(^Worker)context.user_ptr
 
-	if a.tag < b.tag do a, b = b, a
+	tag_a, tag_b := port_tag(a), port_tag(b)
+	if tag_a < tag_b {
+		a, b = b, a
+		tag_a, tag_b = tag_b, tag_a
+	}
 
 	tags := struct {
 		tag_a: Tag,
 		tag_b: Tag,
-	}({a.tag, b.tag})
+	}({tag_a, tag_b})
 	switch tags {
 	case {.DUP, .CON}, {.SWI, .DUP}, {.OPE, .DUP}:
 		commute(program, redex)
@@ -407,11 +411,11 @@ interact :: proc(program: ^Program, redex: Pair) {
 	case {.SWI, .OPE}:
 		panic("undefined interaction: SWI~OPE")
 	case:
-		if a.tag == .REF && b == {tag = .VAR, data = ROOT} do call(program, redex)
-		else if a.tag == .VAR || b.tag == .VAR {
+		if tag_a == .REF && b == make_port(.VAR, ROOT) do call(program, redex)
+		else if tag_a == .VAR || tag_b == .VAR {
 			link(program, redex)
 			worker.interactions -= 1
-		} else do fmt.eprintfln("Missing rule for %v:%v", a.tag, b.tag)
+		} else do fmt.eprintfln("Missing rule for %v:%v", tag_a, tag_b)
 	}
 
 	worker.interactions += 1
@@ -421,10 +425,10 @@ interact :: proc(program: ^Program, redex: Pair) {
 commute :: proc(program: ^Program, redex: Pair) {
 	when PROFILE do prof_count(.Commute)
 	con, dup := redex.left, redex.right
-	if con.tag == .DUP do con, dup = dup, con
+	if port_tag(con) == .DUP do con, dup = dup, con
 
 	con_addr: int
-	dup_addr := get_data(dup).(Node_Data).addr
+	dup_addr := port_addr(dup)
 
 	x1 := create_var(program)
 	x2 := create_var(program)
@@ -432,16 +436,16 @@ commute :: proc(program: ^Program, redex: Pair) {
 	x4 := create_var(program)
 
 	node_1, node_2: Port
-	#partial switch con.tag {
+	#partial switch port_tag(con) {
 	case .OPE:
-		con_addr = get_data(con).(Op_Data).addr
-		type := get_data(con).(Op_Data).type
-		node_1 = create_op(program, type, {{tag = .VAR, data = x1}, {tag = .VAR, data = x2}})
-		node_2 = create_op(program, type, {{tag = .VAR, data = x3}, {tag = .VAR, data = x4}})
+		con_addr = op_addr(con)
+		type := op_type(con)
+		node_1 = create_op(program, type, {make_port(.VAR, x1), make_port(.VAR, x2)})
+		node_2 = create_op(program, type, {make_port(.VAR, x3), make_port(.VAR, x4)})
 	case .CON, .SWI:
-		con_addr = get_data(con).(Node_Data).addr
-		node_1 = create_node(program, con.tag, {{tag = .VAR, data = x1}, {tag = .VAR, data = x2}})
-		node_2 = create_node(program, con.tag, {{tag = .VAR, data = x3}, {tag = .VAR, data = x4}})
+		con_addr = port_addr(con)
+		node_1 = create_node(program, port_tag(con), {make_port(.VAR, x1), make_port(.VAR, x2)})
+		node_2 = create_node(program, port_tag(con), {make_port(.VAR, x3), make_port(.VAR, x4)})
 	case:
 		panic("Commute failed")
 	}
@@ -449,8 +453,8 @@ commute :: proc(program: ^Program, redex: Pair) {
 	con_node := arena.at(&program.nodes, con_addr)^
 	dup_node := arena.at(&program.nodes, dup_addr)^
 
-	node_3 := create_node(program, dup.tag, {{tag = .VAR, data = x1}, {tag = .VAR, data = x3}})
-	node_4 := create_node(program, dup.tag, {{tag = .VAR, data = x2}, {tag = .VAR, data = x4}})
+	node_3 := create_node(program, port_tag(dup), {make_port(.VAR, x1), make_port(.VAR, x3)})
+	node_4 := create_node(program, port_tag(dup), {make_port(.VAR, x2), make_port(.VAR, x4)})
 
 	link(program, {node_1, dup_node.left})
 	link(program, {node_2, dup_node.right})
@@ -463,7 +467,7 @@ commute :: proc(program: ^Program, redex: Pair) {
 
 @(private = "file")
 create_var :: proc(program: ^Program) -> u32 {
-	return transmute(u32)Var_Data{addr = alloc_var(program, VARS_EMPTY)}
+	return u32(alloc_var(program, VARS_EMPTY))
 }
 
 @(private = "file")
@@ -481,19 +485,13 @@ delete_var :: proc(program: ^Program, addr: int) {
 }
 
 @(private = "file")
-create_node :: proc(program: ^Program, kind: Tag, pair: Pair) -> (port: Port) {
-	port.tag = kind
-	key := alloc_node(program, pair)
-	port.data = transmute(u32)Node_Data{addr = key}
-	return port
+create_node :: proc(program: ^Program, kind: Tag, pair: Pair) -> Port {
+	return make_port(kind, u32(alloc_node(program, pair)))
 }
 
 @(private = "file")
-create_op :: proc(program: ^Program, type: Op_Type, pair: Pair) -> (port: Port) {
-	port.tag = .OPE
-	key := alloc_node(program, pair)
-	port.data = transmute(u32)Op_Data{type = type, addr = key}
-	return port
+create_op :: proc(program: ^Program, type: Op_Type, pair: Pair) -> Port {
+	return make_op_port(type, alloc_node(program, pair))
 }
 
 @(private = "file")
@@ -524,7 +522,7 @@ erase :: proc(program: ^Program, redex: Pair) {
 	when PROFILE do prof_count(.Erase)
 	a, b := redex.left, redex.right
 
-	#partial switch a.tag {
+	#partial switch port_tag(a) {
 	case .ERA, .REF, .NUM:
 		a, b = b, a
 	}
@@ -532,18 +530,18 @@ erase :: proc(program: ^Program, redex: Pair) {
 	// a is CON or DUP or SWI or OPE
 	// b is ERA or REF or NUM
 	addr: int
-	#partial switch a.tag {
+	#partial switch port_tag(a) {
 	case .CON, .DUP, .SWI:
-		addr = get_data(a).(Node_Data).addr
+		addr = port_addr(a)
 	case .OPE:
-		addr = get_data(a).(Op_Data).addr
+		addr = op_addr(a)
 	}
 	node := arena.at(&program.nodes, addr)^
 
 	delete_node(program, addr)
 
 	b_one, b_two: Port
-	if b.tag == .NUM {
+	if port_tag(b) == .NUM {
 		b_one = b
 		b_two = copy_num(program, b)
 	} else {
@@ -555,19 +553,11 @@ erase :: proc(program: ^Program, redex: Pair) {
 }
 
 @(private = "file")
-copy_num :: #force_inline proc(program: ^Program, num: Port) -> (num_copy: Port) {
-	data := get_data(num).(Num_Data)
-	addr := data.addr
-
+copy_num :: #force_inline proc(program: ^Program, num: Port) -> Port {
 	when PROFILE do prof_num(.Read)
-	val := arena.at(&program.nums, addr)^
+	val := arena.at(&program.nums, num_addr(num))^
 
-	num_copy = {
-		tag  = .NUM,
-		data = transmute(u32)Num_Data{type = data.type, addr = alloc_num(program, val)},
-	}
-
-	return num_copy
+	return make_num_port(num_type(num), alloc_num(program, val))
 }
 
 @(private = "file")
@@ -578,13 +568,13 @@ annihilate :: proc(program: ^Program, redex: Pair) {
 	address_a: int
 	address_b: int
 
-	#partial switch a.tag {
+	#partial switch port_tag(a) {
 	case .OPE:
-		address_a = get_data(a).(Op_Data).addr
-		address_b = get_data(b).(Op_Data).addr
+		address_a = op_addr(a)
+		address_b = op_addr(b)
 	case .CON, .DUP, .SWI:
-		address_a = get_data(a).(Node_Data).addr
-		address_b = get_data(b).(Node_Data).addr
+		address_a = port_addr(a)
+		address_b = port_addr(b)
 	case:
 		panic("Commute failed")
 	}
@@ -592,7 +582,7 @@ annihilate :: proc(program: ^Program, redex: Pair) {
 	node_a := arena.at(&program.nodes, address_a)^
 	node_b := arena.at(&program.nodes, address_b)^
 
-	#partial switch a.tag {
+	#partial switch port_tag(a) {
 	case .CON:
 		link(program, {node_a.left, node_b.right})
 		link(program, {node_a.right, node_b.left})
@@ -608,8 +598,8 @@ annihilate :: proc(program: ^Program, redex: Pair) {
 @(private = "file")
 void :: proc(program: ^Program, redex: Pair) {
 	when PROFILE do prof_count(.Void)
-	if redex.left.tag == .NUM do delete_num(program, get_data(redex.left).(Num_Data).addr)
-	if redex.right.tag == .NUM do delete_num(program, get_data(redex.right).(Num_Data).addr)
+	if port_tag(redex.left) == .NUM do delete_num(program, num_addr(redex.left))
+	if port_tag(redex.right) == .NUM do delete_num(program, num_addr(redex.right))
 }
 
 @(private = "file")
@@ -624,18 +614,18 @@ link :: proc(program: ^Program, redex: Pair) {
 	a, b := redex.left, redex.right
 
 	loop: for {
-		if a.tag != .VAR {
+		if port_tag(a) != .VAR {
 			a, b = b, a
 		}
 
-		if a.tag != .VAR {
+		if port_tag(a) != .VAR {
 			push_redex(program, Pair{a, b})
 			return
 		}
 
 		b = enter(program, b)
 
-		var_addr := get_data(a).(Var_Data).addr
+		var_addr := port_addr(a)
 
 		switch new_a in vars_exchange(program, var_addr, b) {
 		case Port:
@@ -650,8 +640,8 @@ link :: proc(program: ^Program, redex: Pair) {
 enter :: proc(program: ^Program, var: Port) -> Port {
 	var := var
 
-	loop: for var.tag == .VAR {
-		addr := get_data(var).(Var_Data).addr
+	loop: for port_tag(var) == .VAR {
+		addr := port_addr(var)
 		val := vars_exchange(program, addr, nil)
 		switch v in val {
 		case nil:
@@ -674,12 +664,12 @@ vars_exchange :: proc(
 	old_port: Maybe(Port),
 ) {
 	bits := VARS_EMPTY
-	if port, ok := new_port.?; ok do bits = transmute(u32)port
+	if port, ok := new_port.?; ok do bits = u32(port)
 
 	old := sync.atomic_exchange(arena.at(&program.vars, addr), bits)
 	if old == VARS_EMPTY do return nil
 
-	return transmute(Port)old
+	return Port(old)
 }
 
 @(private = "file")
@@ -687,9 +677,9 @@ call :: proc(program: ^Program, redex: Pair) {
 	when PROFILE do prof_count(.Call)
 	a, b := redex.left, redex.right
 
-	if a.tag != .REF do a, b = b, a
+	if port_tag(a) != .REF do a, b = b, a
 
-	addr := get_data(a).(Ref_Data).addr
+	addr := port_addr(a)
 
 	def := (cast(^Worker)context.user_ptr).ctx.book.defs[addr]
 
@@ -730,21 +720,20 @@ call :: proc(program: ^Program, redex: Pair) {
 
 // Def terms use def-local indices; instantiation reserves contiguous arena
 // ranges, so remapping is a base offset added to the packed addr bits (shifted
-// past the type bits for NUM/OPE).
+// past the tag, and past the type bits for NUM/OPE).
 @(private = "file")
 adjust_addr :: proc(port: Port, var_base, node_base, num_base: int) -> Port {
-	port := port
-
-	switch port.tag {
+	switch port_tag(port) {
 	case .VAR:
-		port.data += u32(var_base)
+		return port + Port(u32(var_base) << Tag_Len)
 	case .CON, .DUP, .SWI:
-		port.data += u32(node_base)
+		return port + Port(u32(node_base) << Tag_Len)
 	case .NUM:
-		port.data += u32(num_base) << Num_Type_Len
+		return port + Port(u32(num_base) << (Tag_Len + Num_Type_Len))
 	case .OPE:
-		port.data += u32(node_base) << Op_Type_Len
+		return port + Port(u32(node_base) << (Tag_Len + Op_Type_Len))
 	case .ERA, .REF:
+		return port
 	}
 
 	return port
@@ -755,9 +744,9 @@ apply :: proc(program: ^Program, redex: Pair) {
 	when PROFILE do prof_count(.Apply)
 	swi_or_ope, con := redex.left, redex.right
 
-	if con.tag != .CON do swi_or_ope, con = con, swi_or_ope
+	if port_tag(con) != .CON do swi_or_ope, con = con, swi_or_ope
 
-	addr_con := get_data(con).(Node_Data).addr
+	addr_con := port_addr(con)
 	pair_con := arena.at(&program.nodes, addr_con)^
 
 	x1 := create_var(program)
@@ -765,29 +754,21 @@ apply :: proc(program: ^Program, redex: Pair) {
 	x3 := create_var(program)
 	x4 := create_var(program)
 
-	node_dup := create_node(program, .DUP, {{tag = .VAR, data = x1}, {tag = .VAR, data = x2}})
-	node_con := create_node(program, .CON, {{tag = .VAR, data = x3}, {tag = .VAR, data = x4}})
+	node_dup := create_node(program, .DUP, {make_port(.VAR, x1), make_port(.VAR, x2)})
+	node_con := create_node(program, .CON, {make_port(.VAR, x3), make_port(.VAR, x4)})
 
 	link(program, {node_dup, pair_con.left})
 	link(program, {node_con, pair_con.right})
 
-	#partial switch swi_or_ope.tag {
+	#partial switch port_tag(swi_or_ope) {
 	case .SWI:
 		swi := swi_or_ope
 
-		addr_swi := get_data(swi).(Node_Data).addr
+		addr_swi := port_addr(swi)
 		pair_swi := arena.at(&program.nodes, addr_swi)^
 
-		node_swi1 := create_node(
-			program,
-			swi.tag,
-			{{tag = .VAR, data = x1}, {tag = .VAR, data = x3}},
-		)
-		node_swi2 := create_node(
-			program,
-			swi.tag,
-			{{tag = .VAR, data = x2}, {tag = .VAR, data = x4}},
-		)
+		node_swi1 := create_node(program, .SWI, {make_port(.VAR, x1), make_port(.VAR, x3)})
+		node_swi2 := create_node(program, .SWI, {make_port(.VAR, x2), make_port(.VAR, x4)})
 
 		link(program, {node_swi1, pair_swi.left})
 		link(program, {node_swi2, pair_swi.right})
@@ -795,13 +776,13 @@ apply :: proc(program: ^Program, redex: Pair) {
 		delete_node(program, addr_swi)
 	case .OPE:
 		ope := swi_or_ope
-		type := get_data(ope).(Op_Data).type
+		type := op_type(ope)
 
-		addr_ope := get_data(ope).(Op_Data).addr
+		addr_ope := op_addr(ope)
 		pair_ope := arena.at(&program.nodes, addr_ope)^
 
-		node_ope1 := create_op(program, type, {{tag = .VAR, data = x1}, {tag = .VAR, data = x3}})
-		node_ope2 := create_op(program, type, {{tag = .VAR, data = x2}, {tag = .VAR, data = x4}})
+		node_ope1 := create_op(program, type, {make_port(.VAR, x1), make_port(.VAR, x3)})
+		node_ope2 := create_op(program, type, {make_port(.VAR, x2), make_port(.VAR, x4)})
 
 		link(program, {node_ope1, pair_ope.left})
 		link(program, {node_ope2, pair_ope.right})
@@ -817,13 +798,13 @@ cond :: proc(program: ^Program, redex: Pair) {
 	when PROFILE do prof_count(.Cond)
 	swi, num := redex.left, redex.right
 
-	if swi.tag != .SWI do swi, num = num, swi
+	if port_tag(swi) != .SWI do swi, num = num, swi
 
-	addr_swi := get_data(swi).(Node_Data).addr
+	addr_swi := port_addr(swi)
 	pair := arena.at(&program.nodes, addr_swi)^
 
-	type := get_data(num).(Num_Data).type
-	addr_num := get_data(num).(Num_Data).addr
+	type := num_type(num)
+	addr_num := num_addr(num)
 	when PROFILE do prof_num(.Read)
 	value := arena.at(&program.nums, addr_num)^
 
@@ -841,29 +822,14 @@ cond :: proc(program: ^Program, redex: Pair) {
 	}
 
 	if is_zero {
-		node_con := create_node(
-			program,
-			.CON,
-			{pair.right, {tag = .ERA, data = transmute(u32)Empty{}}},
-		)
+		node_con := create_node(program, .CON, {pair.right, make_port(.ERA, 0)})
 
 		link(program, {pair.left, node_con})
 	} else {
-		num_new := Num_Data {
-			type = type,
-			addr = alloc_num(program, value),
-		}
+		num_new := make_num_port(type, alloc_num(program, value))
 
-		node_con1 := create_node(
-			program,
-			.CON,
-			{{tag = .NUM, data = transmute(u32)num_new}, pair.right},
-		)
-		node_con2 := create_node(
-			program,
-			.CON,
-			{{tag = .ERA, data = transmute(u32)Empty{}}, node_con1},
-		)
+		node_con1 := create_node(program, .CON, {num_new, pair.right})
+		node_con2 := create_node(program, .CON, {make_port(.ERA, 0), node_con1})
 
 		link(program, {pair.left, node_con2})
 	}
@@ -877,15 +843,15 @@ operate :: proc(program: ^Program, redex: Pair) {
 	when PROFILE do prof_count(.Operate)
 	op, num := redex.left, redex.right
 
-	if op.tag != .OPE do op, num = num, op
+	if port_tag(op) != .OPE do op, num = num, op
 
-	type := get_data(op).(Op_Data).type
-	addr := get_data(op).(Op_Data).addr
+	type := op_type(op)
+	addr := op_addr(op)
 
 	pair := arena.at(&program.nodes, addr)^
 
 	// swap rule: # ~ $(a, b) -> a ~ $(#, b)
-	if pair.left.tag != .NUM {
+	if port_tag(pair.left) != .NUM {
 		node_op := create_op(program, type, {num, pair.right})
 		link(program, {pair.left, node_op})
 	} else {
@@ -907,15 +873,12 @@ operate :: proc(program: ^Program, redex: Pair) {
 			panic("Unsupported operation")
 		}
 
-		delete_num(program, get_data(left).(Num_Data).addr)
-		delete_num(program, get_data(right).(Num_Data).addr)
+		delete_num(program, num_addr(left))
+		delete_num(program, num_addr(right))
 
-		num_new := Num_Data {
-			type = result_type,
-			addr = alloc_num(program, result),
-		}
+		num_new := make_num_port(result_type, alloc_num(program, result))
 
-		link(program, {{tag = .NUM, data = transmute(u32)num_new}, pair.right})
+		link(program, {num_new, pair.right})
 	}
 }
 
@@ -923,21 +886,19 @@ operate :: proc(program: ^Program, redex: Pair) {
 get_num_values :: proc(program: ^Program, a, b: Port) -> (Num_Value, Num_Value, Num_Type) {
 	a, b := a, b
 
-	type_a := get_data(a).(Num_Data).type
-	type_b := get_data(b).(Num_Data).type
+	type_a := num_type(a)
+	type_b := num_type(b)
 
 	if type_a < type_b {
 		a, b = b, a
 		type_a, type_b = type_b, type_a
 	}
 
-	addr_a := get_data(a).(Num_Data).addr
 	when PROFILE do prof_num(.Read)
-	value_a := arena.at(&program.nums, addr_a)^
+	value_a := arena.at(&program.nums, num_addr(a))^
 
-	addr_b := get_data(b).(Num_Data).addr
 	when PROFILE do prof_num(.Read)
-	value_b := arena.at(&program.nums, addr_b)^
+	value_b := arena.at(&program.nums, num_addr(b))^
 
 	switch struct {
 		a, b: Num_Type,

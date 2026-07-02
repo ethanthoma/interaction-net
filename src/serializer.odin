@@ -8,12 +8,7 @@ import "shared:arena"
 serialize :: proc(program: ^Program, book: ^Book) -> string {
 	sb := strings.builder_make()
 
-	root_port: Port = {
-		tag  = .VAR,
-		data = ROOT,
-	}
-
-	serialize_port(program, book, root_port, &sb)
+	serialize_port(program, book, make_port(.VAR, ROOT), &sb)
 
 	return strings.to_string(sb)
 }
@@ -25,25 +20,22 @@ delete_serialized_string :: proc(str: string) {
 
 @(private = "file")
 serialize_port :: proc(program: ^Program, book: ^Book, port: Port, sb: ^strings.Builder) {
-	#partial switch port.tag {
+	#partial switch port_tag(port) {
 	case .ERA:
 		fmt.sbprint(sb, "ERA()")
 	case .REF:
-		addr := get_data(port).(Ref_Data).addr
-		name := book.names[addr]
+		name := book.names[port_addr(port)]
 		fmt.sbprintf(sb, "@%v", name)
 	case .VAR:
 		got := enter(program, port)
 		if got != port {
 			serialize_port(program, book, got, sb)
 		} else {
-			addr := get_data(port).(Var_Data).addr
-			fmt.sbprintf(sb, "v%d", addr)
+			fmt.sbprintf(sb, "v%d", port_addr(port))
 		}
 	case .NUM:
-		type := get_data(port).(Num_Data).type
-		addr := get_data(port).(Num_Data).addr
-		value := arena.at(&program.nums, addr)^
+		type := num_type(port)
+		value := arena.at(&program.nums, num_addr(port))^
 		switch type {
 		case .Uint:
 			fmt.sbprintf(sb, "%v", value)
@@ -53,8 +45,8 @@ serialize_port :: proc(program: ^Program, book: ^Book, port: Port, sb: ^strings.
 			fmt.sbprintf(sb, "%v", transmute(f32)value)
 		}
 	case .OPE:
-		type := get_data(port).(Op_Data).type
-		addr := get_data(port).(Op_Data).addr
+		type := op_type(port)
+		addr := op_addr(port)
 
 		#partial switch type {
 		case .Add:
@@ -75,7 +67,7 @@ serialize_port :: proc(program: ^Program, book: ^Book, port: Port, sb: ^strings.
 		serialize_port(program, book, pair.right, sb)
 		fmt.sbprint(sb, ")")
 	case:
-		#partial switch port.tag {
+		#partial switch port_tag(port) {
 		case .CON:
 			fmt.sbprint(sb, "CON(")
 		case .DUP:
@@ -83,8 +75,7 @@ serialize_port :: proc(program: ^Program, book: ^Book, port: Port, sb: ^strings.
 		case .SWI:
 			fmt.sbprint(sb, "SWI(")
 		}
-		addr := get_data(port).(Node_Data).addr
-		pair := arena.at(&program.nodes, addr)^
+		pair := arena.at(&program.nodes, port_addr(port))^
 		serialize_port(program, book, pair.left, sb)
 		fmt.sbprint(sb, ", ")
 		serialize_port(program, book, pair.right, sb)
