@@ -140,6 +140,35 @@ Conclusions:
   heuristic (don't spawn 24 workers for sequential workloads) would close the
   rest, but is polish, not architecture.
 
+## per-interaction cost (2026-07-02)
+
+Single-worker fork.inio via `perf stat`: ~4,700 instructions per interaction
+(15.8B instructions / 3.38M interactions), IPC 2.3, 0.16 cache-misses per
+interaction. The CPU is not stalled — the runtime simply executes 20-80x more
+instructions per interaction than an HVM-class runtime (~50-200). Closing that
+is a constant-factor redesign (port decoding, link/substitution machinery,
+dispatch), not a cache or scheduling problem. ~12% of cycles are kernel page
+faults from lazily faulting the 1 GB padded vars arena (16M x 64B slots).
+
+Measured micro-experiments, so nobody re-runs them expecting wins:
+
+- Contiguous def instantiation (LANDED): `arena.alloc_range` reserves per-def
+  node/var/num ranges with one atomic bump; remap = base offset added to the
+  packed addr bits; the three per-call `make`/`delete` maps are gone.
+  -6.5% instructions, +2-3% single-worker MIps (consistent), neutral at 24w.
+- Replacing `get_data` union decoding with inlined bit-field accessors:
+  REGRESSED (+10% instructions, -7% MIps). The shared out-of-line decode is
+  better codegen than 37 inlined copies. Reverted.
+- Per-worker scratch buffers for the call() maps (keeping per-item allocs):
+  wash at 1w, -10% at 24w. Superseded by contiguous ranges. Reverted.
+
+Measurement caveat: perf symbol shares on these Odin binaries are unreliable —
+`@(private)` procs inlined by `-o:speed` emit no symbols, so samples get
+attributed to the nearest preceding named symbol (e.g. a ~10-instruction
+`adjust_addr` "showing" 22%). Trust `perf stat` instruction/cycle totals,
+interleaved A/B wall-clock, and interaction counts; do not trust per-symbol
+percentages without disassembly-level confirmation.
+
 Older notes on the rec/stress anti-scaling investigation:
 
 Older levers, in order:

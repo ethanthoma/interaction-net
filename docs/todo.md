@@ -28,11 +28,6 @@ Open design work:
   - the OPE-CON is commution in HVM. Here we use apply like we do with SWI
   - the apply interaction generates DUP nodes which makes them unsafe for high
     order functions?
-- copying from book (our list of definitions) into the program is too taxing as
-  we have to adjust every address
-  - reuse per-worker scratch maps instead of make/delete per call() first
-  - reserve a contiguous arena range per def so remap becomes base + i
-  - numbers can just be buffer copied once packed/inlined
 - annihilate for gamma should probably be its own rule called destruction as it
   is used for function application and deconstructing constructions
   - look into polarity

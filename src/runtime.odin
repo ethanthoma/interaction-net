@@ -693,65 +693,61 @@ call :: proc(program: ^Program, redex: Pair) {
 
 	def := (cast(^Worker)context.user_ptr).ctx.book.defs[addr]
 
-	var_map := make([]int, def.vars)
-	defer delete(var_map)
+	var_base, vars_ok := arena.alloc_range(&program.vars, def.vars)
+	if !vars_ok do panic("var arena full")
 	for i in 0 ..< def.vars {
-		var_map[i] = alloc_var(program, VARS_EMPTY)
+		arena.at(&program.vars, var_base + i)^ = VARS_EMPTY
 	}
 
-	node_map := make([]int, len(def.nodes))
-	defer delete(node_map)
-	for _, i in def.nodes {
-		node_map[i] = alloc_node(program, Pair{})
-	}
+	node_base, nodes_ok := arena.alloc_range(&program.nodes, len(def.nodes))
+	if !nodes_ok do panic("node arena full")
 
-	num_map := make([]int, len(def.numbers))
-	defer delete(num_map)
+	num_base, nums_ok := arena.alloc_range(&program.nums, len(def.numbers))
+	if !nums_ok do panic("num arena full")
 	for value, i in def.numbers {
-		num_map[i] = alloc_num(program, value)
-	}
-
-	adjust_addr := proc(port: Port, var_map, node_map, num_map: []int) -> Port {
-		port := port
-
-		switch port.tag {
-		case .VAR:
-			port.data = transmute(u32)Var_Data{addr = var_map[get_data(port).(Var_Data).addr]}
-		case .CON, .DUP, .SWI:
-			port.data = transmute(u32)Node_Data{addr = node_map[get_data(port).(Node_Data).addr]}
-		case .NUM:
-			port.data = transmute(u32)Num_Data {
-				type = get_data(port).(Num_Data).type,
-				addr = num_map[get_data(port).(Num_Data).addr],
-			}
-		case .ERA, .REF:
-		case .OPE:
-			port.data = transmute(u32)Op_Data {
-				type = get_data(port).(Op_Data).type,
-				addr = node_map[get_data(port).(Op_Data).addr],
-			}
-		}
-
-		return port
+		when PROFILE do prof_num(.Alloc)
+		arena.at(&program.nums, num_base + i)^ = value
 	}
 
 	for node, i in def.nodes {
-		left := adjust_addr(node.left, var_map, node_map, num_map)
-		right := adjust_addr(node.right, var_map, node_map, num_map)
-		arena.at(&program.nodes, node_map[i])^ = Pair{left, right}
+		left := adjust_addr(node.left, var_base, node_base, num_base)
+		right := adjust_addr(node.right, var_base, node_base, num_base)
+		arena.at(&program.nodes, node_base + i)^ = Pair{left, right}
 	}
 
 	for pair in def.redexes {
 		link(
 			program,
 			{
-				adjust_addr(pair.left, var_map, node_map, num_map),
-				adjust_addr(pair.right, var_map, node_map, num_map),
+				adjust_addr(pair.left, var_base, node_base, num_base),
+				adjust_addr(pair.right, var_base, node_base, num_base),
 			},
 		)
 	}
 
-	link(program, {adjust_addr(def.root, var_map, node_map, num_map), b})
+	link(program, {adjust_addr(def.root, var_base, node_base, num_base), b})
+}
+
+// Def terms use def-local indices; instantiation reserves contiguous arena
+// ranges, so remapping is a base offset added to the packed addr bits (shifted
+// past the type bits for NUM/OPE).
+@(private = "file")
+adjust_addr :: proc(port: Port, var_base, node_base, num_base: int) -> Port {
+	port := port
+
+	switch port.tag {
+	case .VAR:
+		port.data += u32(var_base)
+	case .CON, .DUP, .SWI:
+		port.data += u32(node_base)
+	case .NUM:
+		port.data += u32(num_base) << Num_Type_Len
+	case .OPE:
+		port.data += u32(node_base) << Op_Type_Len
+	case .ERA, .REF:
+	}
+
+	return port
 }
 
 @(private = "file")

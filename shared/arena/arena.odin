@@ -68,6 +68,16 @@ free :: proc(a: ^$A/Arena($T, $ALIGN), cache: ^Cache, index: int) {
 	append(&cache._free, index)
 }
 
+// Reserve count contiguous fresh slots with one atomic bump, so a caller can
+// remap a block of local indices as base + i. Bypasses the free list: slots
+// freed later are reused individually via alloc, never re-formed into ranges,
+// so _bump grows monotonically with total range volume (capacity is the bound).
+alloc_range :: proc(a: ^$A/Arena($T, $ALIGN), count: int) -> (base: int, ok: bool) {
+	base = sync.atomic_add(&a._bump, count)
+	if base + count > builtin.len(a._slots) do return 0, false
+	return base, true
+}
+
 at :: proc "contextless" (a: ^$A/Arena($T, $ALIGN), index: int) -> ^T #no_bounds_check {
 	return &a._slots[index].value
 }

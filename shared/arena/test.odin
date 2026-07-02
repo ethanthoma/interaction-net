@@ -44,6 +44,26 @@ test_free_reuses_slots :: proc(t: ^testing.T) {
 }
 
 @(test)
+test_alloc_range :: proc(t: ^testing.T) {
+	a: Arena(int, align_of(int))
+	init(&a, 16)
+	defer destroy(&a)
+
+	base, ok := alloc_range(&a, 4)
+	testing.expect(t, ok)
+	for i in 0 ..< 4 do at(&a, base + i)^ = 100 + i
+
+	base2, ok2 := alloc_range(&a, 4)
+	testing.expect(t, ok2)
+	testing.expect(t, base2 >= base + 4)
+
+	for i in 0 ..< 4 do testing.expect(t, at(&a, base + i)^ == 100 + i)
+
+	_, ok3 := alloc_range(&a, 16)
+	testing.expect(t, !ok3)
+}
+
+@(test)
 test_full :: proc(t: ^testing.T) {
 	CAP :: 8
 	a: Arena(int, align_of(int))
