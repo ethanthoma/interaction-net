@@ -226,11 +226,49 @@ BFS level to a spine. fork 1w: cycles 1.08B -> 288M (IPC 1.03 -> 3.3), page
 faults 230k -> 16k — the working set became cache-resident. Work mix on rec at
 24w: 63% of redexes chain, deque own/steal drops to 16%.
 
-Cumulative vs the original baseline: fork 1w 1.2 -> ~38 MIps (31x), fork 24w
-16.6 -> ~50 MIps (3x). Single-worker throughput is now in the HVM class. Open
-threads: fork 24w is only ~1.3x its 1w (parallel efficiency collapsed — likely
-starved deques now that chains eat most redexes, or memory bandwidth; measure
-before touching), and rec still anti-scales past a few workers.
+Cumulative vs the original baseline: fork 1w 1.2 -> ~38 MIps (31x). Single-worker
+throughput is now in the HVM class.
+
+## post-chaining parallel efficiency (2026-07-02)
+
+Chaining collapsed parallel scaling: fork at 8w ran SLOWER than 1w (34 vs 39
+MIps, measured on a 4x workload — `fork.inio` with `@depth = 14` — to rule out
+benchmark-too-small). perf stat showed the signature: identical instructions
+(3.8B, so nobody spins), but cycles 1.2B -> 12.1B and cache-misses 448k -> 53M
+(119x). All workers busy, all stalled on coherence traffic.
+
+Cause: one shared `_bump` frontier meant every worker's allocations interleaved
+in the same active region — adjacent slots, adjacent lines (L2 spatial
+prefetcher pulls 128B pairs), and free lists recycling foreign slots. Ruled out
+by measurement on the way: padding vars/nodes back to 64B slots made it WORSE
+(capacity misses replace sharing), and line-aligning ranges alone won only +4%.
+
+Fix: per-worker chunk allocation (`shared/arena`). Each `Cache` carves a
+private CHUNK_SLOTS=4096 chunk off the shared bump (one CAS per chunk) and
+serves both singles and ranges from it, so each worker's working set is a
+private region. fork14 MIps by workers, before -> after:
+
+| workers | shared frontier | per-worker chunks |
+| ------- | --------------- | ----------------- |
+| 1       | 39              | 38                |
+| 2       | 37              | 62                |
+| 4       | 38              | 79                |
+| 8       | 34              | 106               |
+| 16      | 45              | 144               |
+| 24      | 49              | **157**           |
+
+Cache misses at 8w: 53M -> 7M. rec 24w also +35% (18 -> 24.7); 1w unchanged.
+Remaining coherence cost is protocol-inherent (~0.5 misses/interaction:
+`vars_exchange`, `outstanding`, steals); 24w runs at ~4.2x of 1w.
+
+Discovered along the way (both now recorded in todo):
+- `NODE_CAP` above `1 << 25` silently overflows the 25-bit OPE address field
+  (`make_op_port` shifts the addr off the top) — corrupt ports, SWI~OPE panics.
+  No assertion guards Port encoding today.
+- `alloc_range`'s monotonic bump means arena capacity bounds TOTAL call volume,
+  not live size: `fork.inio` at `@depth = 14` needs `NODE_CAP 1 << 25`
+  (default is 1 << 23). Range reuse (free-list coalescing or per-def slabs) is
+  the eventual fix.
 
 Older notes on the rec/stress anti-scaling investigation:
 

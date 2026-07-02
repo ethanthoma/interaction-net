@@ -12,9 +12,17 @@ Measured priorities (rec.inio / stress.inio): the hot rules are annihilate
 - inline numbers into the Port to drop the nums arena (operate/cond/void touch
   it on ~40% of interactions) which is blocked on the 32-bit Port width, needs a
   wider Port/Pair
-- post-tail-chaining parallel efficiency: fork at 24 workers is only ~1.3x its
-  single-worker throughput; find out whether deques are starved (chains eat 63%
-  of redexes) or memory bandwidth is the wall
+- assert Port encoding bounds: NODE_CAP above 1 << 25 silently overflows the
+  25-bit OPE address in make_op_port and corrupts ports (measured: SWI~OPE
+  panics); make_*_port should assert addr fits, and run() should assert caps
+  against the encoding limits
+- reuse freed slots for alloc_range: the monotonic bump means arena capacity
+  bounds TOTAL call volume, not live size (fork at depth 14 already needs
+  NODE_CAP 1 << 25); needs free-range coalescing or per-def slabs
+- remaining parallel coherence cost is protocol-inherent (~0.5
+  misses/interaction: vars_exchange, outstanding, steal probes); 24 workers run
+  at ~4.2x of 1 — batching outstanding updates per chain or quiescence-based
+  termination would be the next lever
 
 Open design work:
 
