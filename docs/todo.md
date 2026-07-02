@@ -2,9 +2,9 @@
 
 ## runtime
 
-Reduction is memory-bandwidth bound; profile before optimizing. Build with
-`-define:PROFILE=true` for a per-rule interaction breakdown. Baseline numbers
-and the measured hot path live in [perf-baseline.md](./perf-baseline.md).
+Profile before optimizing. Build with `-define:PROFILE=true` for a per-rule
+interaction breakdown and the work-mix counters. All measurements and the
+hot-loop redesign story live in [perf-baseline.md](./perf-baseline.md).
 
 Measured priorities (rec.inio / stress.inio): the hot rules are annihilate
 (~26-32%) and operate (~21-25%) and call/def-expansion is only ~10-12%.
@@ -12,10 +12,9 @@ Measured priorities (rec.inio / stress.inio): the hot rules are annihilate
 - inline numbers into the Port to drop the nums arena (operate/cond/void touch
   it on ~40% of interactions) which is blocked on the 32-bit Port width, needs a
   wider Port/Pair
-- kill the 64-byte `Slot` cache-line padding (arena.odin) which needs per-worker
-  packed arena segments to stay false-sharing free
-- make the global interaction counter per-worker (runtime.odin `interact`) to
-  stop cache-line ping-pong across workers
+- post-tail-chaining parallel efficiency: fork at 24 workers is only ~1.3x its
+  single-worker throughput; find out whether deques are starved (chains eat 63%
+  of redexes) or memory bandwidth is the wall
 
 Open design work:
 

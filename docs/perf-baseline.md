@@ -202,10 +202,35 @@ showed: fork 24w 14.2 -> 23.2 (stable), fork 1w +5%, rec 1w +3%, rec 24w wash.
 Vars reserve is now 64 MB (was 1 GB).
 
 Net vs the pre-redesign baseline: fork 1w +108%, rec 1w +114%, fork 24w +37%,
-rec 24w +65%. Remaining hot-loop instruction budget (~330/interaction) by
-srcline: alloc/free free-list traffic, link/enter atomic exchanges, deque and
-`outstanding` coordination — plus residual page faults on first-touch of the
-packed arenas.
+rec 24w +65%. Re-attribution of the remaining ~330 instructions/interaction by
+srcline: ~28% worker-0 clock reads (`stopwatch_duration` -> `tick_now` per
+interaction), ~21% deque push/pop, plus alloc/free and `outstanding` traffic.
+
+Third lever, tail-chaining: the first redex an interaction produces is parked
+in `worker.next` and reduced immediately, skipping the deque round-trip and
+inheriting the consumed redex's `outstanding` count (one atomic decrement per
+chain instead of add+sub per redex). The clock check is also rate-limited to
+every 2^16 interactions. Measured (interleaved A/B, identical interaction
+counts and results):
+
+| bench    | pre  | chained | speedup |
+| -------- | ---- | ------- | ------- |
+| fork 1w  | 2.53 | ~38     | 15x     |
+| rec 1w   | 2.50 | ~31     | 12.5x   |
+| fork 24w | 23.4 | ~50     | 2.1x    |
+| rec 24w  | 4.5  | ~17     | 3.8x    |
+
+The 15x is structural, not instruction count (instructions only -10%): chaining
+makes reduction depth-first, so the live-redex frontier collapses from a whole
+BFS level to a spine. fork 1w: cycles 1.08B -> 288M (IPC 1.03 -> 3.3), page
+faults 230k -> 16k — the working set became cache-resident. Work mix on rec at
+24w: 63% of redexes chain, deque own/steal drops to 16%.
+
+Cumulative vs the original baseline: fork 1w 1.2 -> ~38 MIps (31x), fork 24w
+16.6 -> ~50 MIps (3x). Single-worker throughput is now in the HVM class. Open
+threads: fork 24w is only ~1.3x its 1w (parallel efficiency collapsed — likely
+starved deques now that chains eat most redexes, or memory bandwidth; measure
+before touching), and rec still anti-scales past a few workers.
 
 Older notes on the rec/stress anti-scaling investigation:
 
