@@ -173,9 +173,10 @@ seed_redex :: proc(program: ^Program, pair: Pair) {
 
 @(private = "file")
 seed_root :: proc(program: ^Program) {
-	c: arena.Cache
-	arena.alloc(&program.vars, &c, VARS_EMPTY)
-	arena.cache_destroy(&c)
+	index, ok := arena.reserve(&program.vars, 1)
+	if !ok do panic("var arena full")
+	assert(index == int(ROOT))
+	arena.at(&program.vars, index)^ = VARS_EMPTY
 }
 
 // The first redex produced by an interaction is tail-chained: parked in
@@ -705,18 +706,19 @@ call :: proc(program: ^Program, redex: Pair) {
 
 	addr := port_addr(a)
 
-	def := (cast(^Worker)context.user_ptr).ctx.book.defs[addr]
+	worker := cast(^Worker)context.user_ptr
+	def := worker.ctx.book.defs[addr]
 
-	var_base, vars_ok := arena.alloc_range(&program.vars, def.vars)
+	var_base, vars_ok := arena.alloc_range(&program.vars, &worker.vars, def.vars)
 	if !vars_ok do panic("var arena full")
 	for i in 0 ..< def.vars {
 		arena.at(&program.vars, var_base + i)^ = VARS_EMPTY
 	}
 
-	node_base, nodes_ok := arena.alloc_range(&program.nodes, len(def.nodes))
+	node_base, nodes_ok := arena.alloc_range(&program.nodes, &worker.nodes, len(def.nodes))
 	if !nodes_ok do panic("node arena full")
 
-	num_base, nums_ok := arena.alloc_range(&program.nums, len(def.numbers))
+	num_base, nums_ok := arena.alloc_range(&program.nums, &worker.nums, len(def.numbers))
 	if !nums_ok do panic("num arena full")
 	for value, i in def.numbers {
 		when PROFILE do prof_num(.Alloc)

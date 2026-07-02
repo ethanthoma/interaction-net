@@ -32,14 +32,14 @@ test_free_reuses_slots :: proc(t: ^testing.T) {
 
 	i0, _ := alloc(&a, &c, 1)
 	i1, _ := alloc(&a, &c, 2)
-	testing.expect(t, high_water(&a) == 2)
+	reserved := high_water(&a)
 
 	free(&a, &c, i1)
 	free(&a, &c, i0)
 
 	j0, _ := alloc(&a, &c, 3)
 	j1, _ := alloc(&a, &c, 4)
-	testing.expectf(t, high_water(&a) == 2, "reuse should not bump: hw=%d", high_water(&a))
+	testing.expectf(t, high_water(&a) == reserved, "reuse should not bump: hw=%d", high_water(&a))
 	testing.expect(t, j0 == i0 && j1 == i1)
 }
 
@@ -48,19 +48,44 @@ test_alloc_range :: proc(t: ^testing.T) {
 	a: Arena(int, align_of(int))
 	init(&a, 16)
 	defer destroy(&a)
+	c: Cache
+	defer cache_destroy(&c)
 
-	base, ok := alloc_range(&a, 4)
+	base, ok := alloc_range(&a, &c, 4)
 	testing.expect(t, ok)
 	for i in 0 ..< 4 do at(&a, base + i)^ = 100 + i
 
-	base2, ok2 := alloc_range(&a, 4)
+	base2, ok2 := alloc_range(&a, &c, 4)
 	testing.expect(t, ok2)
 	testing.expect(t, base2 >= base + 4)
 
 	for i in 0 ..< 4 do testing.expect(t, at(&a, base + i)^ == 100 + i)
 
-	_, ok3 := alloc_range(&a, 16)
+	_, ok3 := alloc_range(&a, &c, 16)
 	testing.expect(t, !ok3)
+}
+
+// Two owners' fresh allocations must come from disjoint chunks, not interleave
+// at a shared frontier.
+@(test)
+test_chunks_are_per_owner :: proc(t: ^testing.T) {
+	a: Arena(int, align_of(int))
+	init(&a, 4 * CHUNK_SLOTS)
+	defer destroy(&a)
+	c1, c2: Cache
+	defer cache_destroy(&c1)
+	defer cache_destroy(&c2)
+
+	i1, ok1 := alloc(&a, &c1, 1)
+	i2, ok2 := alloc(&a, &c2, 2)
+	testing.expect(t, ok1)
+	testing.expect(t, ok2)
+
+	j1, _ := alloc(&a, &c1, 3)
+	j2, _ := alloc(&a, &c2, 4)
+	testing.expect(t, j1 == i1 + 1)
+	testing.expect(t, j2 == i2 + 1)
+	testing.expect(t, abs(i2 - i1) >= CHUNK_SLOTS)
 }
 
 @(test)
