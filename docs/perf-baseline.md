@@ -52,16 +52,32 @@ interactions, so on average every interaction does one num alloc and one num fre
 ~505 KB and stress's is ~17 KB (L1).
 
 The hot path is annihilate + operate. HVM-class CPU throughput is 2-3 orders of
-magnitude above this baseline, so the gap is architectural. Levers, in order:
+magnitude above this baseline, so the gap is architectural. The 64-byte `Slot`
+cache-line padding (`shared/arena/arena.odin`) is the dominant memory waste — it
+hits *every* arena (an 8-byte `Pair` and a 4-byte num each burn a full line, 8x /
+16x blowup). Slot alignment is now a per-arena type parameter, packed one arena
+at a time so each step is measured in isolation. Levers, in order:
 
-1. Drop the 64-byte `Slot` cache-line padding (`shared/arena/arena.odin`). It is
-   the dominant memory problem and hits *every* arena: an 8-byte `Pair` and a
-   4-byte num each burn a full line (8x / 16x blowup) — it alone makes rec's num
-   set 8 MB. Needs per-worker packed arena segments to stay false-sharing free.
-2. Per-worker interaction counter — DONE. Was a single global atomic in
-   `interact()` ping-ponging one line across all workers every interaction.
-3. Inline numbers into the `Port`. Measured 1.32 arena touches + 1.68 alloc/free
+1. Pack the `nums` arena (align 4B) — DONE. Footprint 8.08 MB → 502 KB peak
+   (16x). Throughput on rec is unchanged (packed vs padded A/B: median 2.78 vs
+   2.82 MIps — within noise), because the num set was already cache-resident on
+   this few-core box. A memory win with no regression; the throughput bottleneck
+   is elsewhere.
+2. Pack the `nodes` arena (align 8B) — NEXT. This is the hot one: annihilate is
+   32% of interactions and reads/writes node `Pair`s. Nodes are written by their
+   allocating worker (alloc + call-expansion) and only *read* cross-worker, so
+   per-worker alloc slabs are not required to stay false-sharing free — but
+   cross-worker frees (a stolen redex freeing another worker's node) reuse a slot
+   in a peer's region; watch for a throughput regression in the A/B.
+3. Pack the `vars` arena — RISKY, deferred. Vars are written in place by any
+   worker via `sync.atomic_exchange` (the substitution linker, `vars_exchange`),
+   so tight-packing puts independent vars on a shared line and false-shares the
+   hottest concurrent write. The 64-byte padding is load-bearing here; only pack
+   behind a measured before/after.
+4. Per-worker interaction counter — DONE (removed the one global atomic in
+   `interact()`).
+5. Inline numbers into the `Port`. Measured 1.32 arena touches + 1.68 alloc/free
    ops per interaction, so not a wash — but it needs a wider u64 `Port`, doubling
-   every `Pair` (annihilate, 32%, pays 2x on 100% of interactions), and packing
-   (#1) already shrinks the num arena 16x. Re-measure after packing; the marginal
-   win may not clear the u64 cost.
+   every `Pair` (annihilate pays 2x on 100% of interactions), and packing already
+   shrinks the num arena 16x. Re-measure after node packing; the marginal win may
+   not clear the u64 cost.

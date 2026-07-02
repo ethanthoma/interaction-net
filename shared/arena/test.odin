@@ -8,7 +8,7 @@ import "core:thread"
 
 @(test)
 test_alloc_at :: proc(t: ^testing.T) {
-	a: Arena(int)
+	a: Arena(int, align_of(int))
 	init(&a, 16)
 	defer destroy(&a)
 	c: Cache
@@ -24,7 +24,7 @@ test_alloc_at :: proc(t: ^testing.T) {
 
 @(test)
 test_free_reuses_slots :: proc(t: ^testing.T) {
-	a: Arena(int)
+	a: Arena(int, align_of(int))
 	init(&a, 16)
 	defer destroy(&a)
 	c: Cache
@@ -46,7 +46,7 @@ test_free_reuses_slots :: proc(t: ^testing.T) {
 @(test)
 test_full :: proc(t: ^testing.T) {
 	CAP :: 8
-	a: Arena(int)
+	a: Arena(int, align_of(int))
 	init(&a, CAP)
 	defer destroy(&a)
 	c: Cache
@@ -67,7 +67,7 @@ STEPS :: 20_000
 
 @(private = "file")
 Worker :: struct {
-	a:    ^Arena(int),
+	a:    ^Arena(int, align_of(int)),
 	id:   int,
 	torn: int,
 }
@@ -108,7 +108,7 @@ churn :: proc(w: ^Worker) {
 
 @(test)
 test_concurrent_no_shared_live_index :: proc(t: ^testing.T) {
-	a: Arena(int)
+	a: Arena(int, align_of(int))
 	init(&a, 1 << 20)
 	defer destroy(&a)
 

@@ -70,15 +70,16 @@ when PROFILE {
 		for count, event in prof_num_counts {
 			fmt.printfln("Nums %-11v %d", event, count)
 		}
-		fmt.printfln("Nums %-11v %d values, %d bytes physical (%dB slots)", "peak", slots, slots * size_of(arena.Slot(u32)), size_of(arena.Slot(u32)))
+		slot_bytes := size_of(arena.Slot(u32, align_of(u32)))
+		fmt.printfln("Nums %-11v %d values, %d bytes physical (%dB slots)", "peak", slots, slots * slot_bytes, slot_bytes)
 	}
 }
 
 Program :: struct {
-	nodes:       arena.Arena(Pair),
+	nodes:       arena.Arena(Pair, arena.CACHE_LINE_SIZE),
 	redexes:     queue.Queue(Pair),
-	vars:        arena.Arena(u32),
-	nums:        arena.Arena(u32),
+	vars:        arena.Arena(u32, arena.CACHE_LINE_SIZE),
+	nums:        arena.Arena(u32, align_of(u32)),
 	outstanding: int,
 }
 
