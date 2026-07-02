@@ -1,0 +1,25 @@
+@depth = 12
+@leaf = 100
+
+@root = a
+    & @fork ~ CON(@depth, a)
+
+@fork = CON(
+    a,
+    SWI(CON(@fork_succ, @leafwork), a)
+)
+
+@fork_succ = CON(
+    r,
+    DUP(p1, p2)
+)
+    & @fork ~ CON(p1, +(b, r))
+    & @fork ~ CON(p2, b)
+
+@leafwork = x
+    & @sum ~ CON(@leaf, x)
+
+@sum = CON(
+    a,
+    DUP(b, SWI(CON(@sum, 0), +(b, a)))
+)

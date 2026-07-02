@@ -108,14 +108,39 @@ more idle workers were spinning, as predicted. It does not cure the anti-scaling
 on `outstanding` (2 per interaction, still contended) and rec's structural
 parallelism deficit (68% miss — not enough independent redexes to feed 24 cores).
 
-Remaining coordination levers:
-- Remove the per-redex `outstanding` add/sub via quiescence/idle-worker
-  termination detection (shared touch only on active↔idle transitions). Bigger,
-  bug-prone concurrency change; measure whether the add/sub is still limiting
-  first.
-- More-parallel benchmarks: rec is a recursion with limited exposed parallelism;
-  goal-1 scaling needs workloads (and possibly eager expansion) that keep >4
-  workers fed. The 68% miss is a workload property, not just a coordination bug.
+## parallel workload scaling (fork.inio, 2026-07-02)
+
+rec/stress are LINEAR recursions (each level spawns one recursive call), so they
+cannot feed 24 cores — their anti-scaling is a workload property. `fork.inio` is
+a binary fork/join (`fork(n) = fork(n-1) + fork(n-1)`, 2^12 independent
+`sum(100)` leaves) and tells the opposite story:
+
+| workers | MIps | speedup |
+| ------- | ---- | ------- |
+| 1       | 1.22 | 1.0x    |
+| 2       | 3.23 | 2.7x    |
+| 4       | 6.54 | 5.4x    |
+| 8       | 10.4 | 8.5x    |
+| 16      | 14.5 | 11.9x   |
+| 24      | 17.2 | 14.2x   |
+
+take_work mix at 24 workers: own 96.0%, steal 3.6%, global 0%, miss 0.3% (vs
+rec's 68% miss). The scheduler is validated: with parallel work it scales
+near-linearly to 8 workers and monotonically to 24 (59% efficiency), 17-21 MIps
+sustained. The superlinear 2-4w region is unexplained (cache effects?) but
+consistent across runs.
+
+Conclusions:
+- The work-stealing coordination is NOT the goal-1 blocker. Single-worker
+  per-interaction cost (~1.2 MIps sequential) and workload parallelism are.
+- The `outstanding` add/sub per redex did not stop 14x scaling; removing it via
+  quiescence termination detection is now a marginal lever, not a priority.
+- rec/stress anti-scaling is inherent to linear recursion + idle spinning; the
+  deep-idle termination check (below) already softened it. A worker-count
+  heuristic (don't spawn 24 workers for sequential workloads) would close the
+  rest, but is polish, not architecture.
+
+Older notes on the rec/stress anti-scaling investigation:
 
 Older levers, in order:
 
