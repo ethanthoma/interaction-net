@@ -150,6 +150,9 @@ is a constant-factor redesign (port decoding, link/substitution machinery,
 dispatch), not a cache or scheduling problem. ~12% of cycles are kernel page
 faults from lazily faulting the 1 GB padded vars arena (16M x 64B slots).
 
+RESOLVED (2026-07-02): the constant factor was Odin's `bit_field` lowering — see
+"hot loop redesign" below. Post-fix cost is ~330 instructions/interaction.
+
 Measured micro-experiments, so nobody re-runs them expecting wins:
 
 - Contiguous def instantiation (LANDED): `arena.alloc_range` reserves per-def
@@ -167,7 +170,42 @@ Measurement caveat: perf symbol shares on these Odin binaries are unreliable —
 attributed to the nearest preceding named symbol (e.g. a ~10-instruction
 `adjust_addr` "showing" 22%). Trust `perf stat` instruction/cycle totals,
 interleaved A/B wall-clock, and interaction counts; do not trust per-symbol
-percentages without disassembly-level confirmation.
+percentages without disassembly-level confirmation. For real attribution, build
+with `-o:speed -debug` (identical codegen, adds DWARF) and use
+`perf report -s srcline`, which resolves through inlining.
+
+## hot loop redesign (2026-07-02)
+
+`perf report -s srcline` on a `-debug` build attributed ~49% of ALL instructions
+to `base:runtime/internal.odin` `__read_bits`/`__write_bits` — Odin lowers
+access to non-byte-aligned `bit_field` fields through helpers that loop ONE BIT
+AT A TIME. `Port` was `bit_field u32 { tag: 3 bits, data: 29 bits }`, so `data`
+(and every `Num_Data`/`Op_Data` field) paid a ~29-iteration loop per read and
+write, on every port touched by every rule. This retroactively explains the two
+"reverted micro-experiments" above: inlining accessors ADDED bit_field accesses
+(hence +10% instructions), and adjust_addr's 22% perf share was largely real.
+
+Fix: `Port` is a `distinct u32`; tag/payload/type/addr access is explicit
+shift/mask in `#force_inline` accessors (`net.odin`), same bit layout. Results
+byte-identical on all examples.
+
+- instructions/interaction: 4,678 -> 330 (14x)
+- fork 1w: 1.23 -> 2.44 MIps; rec 1w: 1.17 -> 2.42 (2x)
+- rec 24w: 2.70 -> 4.45 (+65%)
+- fork 24w REGRESSED: 16.9 -> 14.2, unstable — compute got so cheap that the
+  run became page-fault-bound (sys 0.79s -> 4.10s, faults 229k -> 444k; 74% of
+  task-clock in the kernel faulting the 1 GB padded vars arena).
+
+Packing the vars arena (64B -> 4B slots, the "risky" lever 3 below) fixed that
+and measured as a pure win — the feared `vars_exchange` false sharing never
+showed: fork 24w 14.2 -> 23.2 (stable), fork 1w +5%, rec 1w +3%, rec 24w wash.
+Vars reserve is now 64 MB (was 1 GB).
+
+Net vs the pre-redesign baseline: fork 1w +108%, rec 1w +114%, fork 24w +37%,
+rec 24w +65%. Remaining hot-loop instruction budget (~330/interaction) by
+srcline: alloc/free free-list traffic, link/enter atomic exchanges, deque and
+`outstanding` coordination — plus residual page faults on first-touch of the
+packed arenas.
 
 Older notes on the rec/stress anti-scaling investigation:
 
@@ -182,11 +220,9 @@ Older levers, in order:
    Throughput on rec unchanged (packed vs padded A/B: median 2.50 vs 2.41 MIps —
    within noise). Nodes are written by their allocating worker and only *read*
    cross-worker, so no false-sharing regression from packing.
-3. Pack the `vars` arena — RISKY, deferred. Vars are written in place by any
-   worker via `sync.atomic_exchange` (the substitution linker, `vars_exchange`),
-   so tight-packing puts independent vars on a shared line and false-shares the
-   hottest concurrent write. The 64-byte padding is load-bearing here; only pack
-   behind a measured before/after.
+3. Pack the `vars` arena — DONE (2026-07-02, as part of the hot loop redesign
+   above). The feared `vars_exchange` false sharing did not show in A/B; the
+   page-fault relief dominates (fork 24w +63%).
 4. Per-worker interaction counter — DONE (removed the one global atomic in
    `interact()`).
 5. Inline numbers into the `Port`. Measured 1.32 arena touches + 1.68 alloc/free
