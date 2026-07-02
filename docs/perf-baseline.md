@@ -56,19 +56,25 @@ magnitude above this baseline, so the gap is architectural. The 64-byte `Slot`
 cache-line padding (`shared/arena/arena.odin`) is the dominant memory waste — it
 hits *every* arena (an 8-byte `Pair` and a 4-byte num each burn a full line, 8x /
 16x blowup). Slot alignment is now a per-arena type parameter, packed one arena
-at a time so each step is measured in isolation. Levers, in order:
+at a time so each step is measured in isolation.
+
+Measured finding: packing `nums` (16x) and `nodes` (8x) is throughput-neutral on
+this few-core box — the working sets already fit in cache, so arena footprint is
+NOT the throughput bottleneck here. These are memory wins (reserve ~800 MB → ~85
+MB). The ~2.5 MIps ceiling is gated by coordination, not memory bandwidth: the
+next throughput lever is core utilisation / the `outstanding` atomic / work-steal
+overhead, and needs a different probe (are all cores busy? how often do workers
+steal or hit the global queue?). Levers, in order:
 
 1. Pack the `nums` arena (align 4B) — DONE. Footprint 8.08 MB → 502 KB peak
    (16x). Throughput on rec is unchanged (packed vs padded A/B: median 2.78 vs
    2.82 MIps — within noise), because the num set was already cache-resident on
    this few-core box. A memory win with no regression; the throughput bottleneck
    is elsewhere.
-2. Pack the `nodes` arena (align 8B) — NEXT. This is the hot one: annihilate is
-   32% of interactions and reads/writes node `Pair`s. Nodes are written by their
-   allocating worker (alloc + call-expansion) and only *read* cross-worker, so
-   per-worker alloc slabs are not required to stay false-sharing free — but
-   cross-worker frees (a stolen redex freeing another worker's node) reuse a slot
-   in a peer's region; watch for a throughput regression in the A/B.
+2. Pack the `nodes` arena (align 8B) — DONE. 8x smaller (reserve 536 MB → 67 MB).
+   Throughput on rec unchanged (packed vs padded A/B: median 2.50 vs 2.41 MIps —
+   within noise). Nodes are written by their allocating worker and only *read*
+   cross-worker, so no false-sharing regression from packing.
 3. Pack the `vars` arena — RISKY, deferred. Vars are written in place by any
    worker via `sync.atomic_exchange` (the substitution linker, `vars_exchange`),
    so tight-packing puts independent vars on a shared line and false-shares the

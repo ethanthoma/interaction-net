@@ -76,7 +76,7 @@ when PROFILE {
 }
 
 Program :: struct {
-	nodes:       arena.Arena(Pair, arena.CACHE_LINE_SIZE),
+	nodes:       arena.Arena(Pair, align_of(Pair)),
 	redexes:     queue.Queue(Pair),
 	vars:        arena.Arena(u32, arena.CACHE_LINE_SIZE),
 	nums:        arena.Arena(u32, align_of(u32)),
