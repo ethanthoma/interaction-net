@@ -39,14 +39,16 @@ Num_Event :: enum u8 {
 }
 
 // Where a worker's take_work found its next redex, or Miss when it found none
-// and fell into backoff. Confirms whether the runtime anti-scales because idle
-// workers are starved and spinning (hammering the global `outstanding` load).
+// and fell into backoff. Chain counts redexes consumed without touching the
+// deque (tail-chained from the previous interaction). Confirms whether the
+// runtime anti-scales because idle workers are starved and spinning.
 Coord_Event :: enum u8 {
 	Own,
 	Steal,
 	Global,
 	Miss,
 	Overflow,
+	Chain,
 }
 
 when PROFILE {
@@ -176,10 +178,19 @@ seed_root :: proc(program: ^Program) {
 	arena.cache_destroy(&c)
 }
 
+// The first redex produced by an interaction is tail-chained: parked in
+// worker.next and reduced immediately after, without touching the deque. It
+// inherits the consumed redex's outstanding count, so no atomics either; the
+// worker_loop decrements once when the chain dies.
 @(private = "file")
 push_redex :: proc(program: ^Program, pair: Pair) {
-	sync.atomic_add(&program.outstanding, 1)
 	worker := cast(^Worker)context.user_ptr
+	if !worker.has_next {
+		worker.has_next = true
+		worker.next = pair
+		return
+	}
+	sync.atomic_add(&program.outstanding, 1)
 	if !deque.push(&worker.deques[worker.id], pair) {
 		when PROFILE do worker.coord[.Overflow] += 1
 		queue.push(&program.redexes, pair)
@@ -193,6 +204,8 @@ Worker :: struct #align (arena.CACHE_LINE_SIZE) {
 	deques:       []deque.Deque(Pair),
 	id:           int,
 	interactions: int,
+	next:         Pair,
+	has_next:     bool,
 	coord:        [Coord_Event]int,
 	nodes:        arena.Cache,
 	vars:         arena.Cache,
@@ -248,11 +261,14 @@ normalize :: proc(program: ^Program, ctx: ^Context, num_workers: int) {
 SPIN_LIMIT :: 8
 YIELD_LIMIT :: 16
 
+TICK_INTERVAL :: 1 << 16
+
 @(private = "file")
 worker_loop :: proc(worker: ^Worker) {
 	context.user_ptr = worker
 	own := &worker.deques[worker.id]
 	next_tick := 0
+	next_tick_check := TICK_INTERVAL
 	idle := 0
 
 	for {
@@ -271,16 +287,24 @@ worker_loop :: proc(worker: ^Worker) {
 		}
 		idle = 0
 
-		interact(worker.program, redex)
-		sync.atomic_sub(&worker.program.outstanding, 1)
+		for {
+			interact(worker.program, redex)
 
-		if worker.id == 0 {
-			seconds := int(time.duration_seconds(time.stopwatch_duration(worker.ctx.stopwatch)))
-			if seconds >= next_tick {
-				next_tick = seconds + 1
-				print_time(worker.ctx)
+			if worker.id == 0 && worker.interactions >= next_tick_check {
+				next_tick_check = worker.interactions + TICK_INTERVAL
+				seconds := int(time.duration_seconds(time.stopwatch_duration(worker.ctx.stopwatch)))
+				if seconds >= next_tick {
+					next_tick = seconds + 1
+					print_time(worker.ctx)
+				}
 			}
+
+			if !worker.has_next do break
+			worker.has_next = false
+			redex = worker.next
+			when PROFILE do worker.coord[.Chain] += 1
 		}
+		sync.atomic_sub(&worker.program.outstanding, 1)
 	}
 }
 
