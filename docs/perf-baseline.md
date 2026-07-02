@@ -58,13 +58,41 @@ hits *every* arena (an 8-byte `Pair` and a 4-byte num each burn a full line, 8x 
 16x blowup). Slot alignment is now a per-arena type parameter, packed one arena
 at a time so each step is measured in isolation.
 
-Measured finding: packing `nums` (16x) and `nodes` (8x) is throughput-neutral on
-this few-core box — the working sets already fit in cache, so arena footprint is
-NOT the throughput bottleneck here. These are memory wins (reserve ~800 MB → ~85
-MB). The ~2.5 MIps ceiling is gated by coordination, not memory bandwidth: the
-next throughput lever is core utilisation / the `outstanding` atomic / work-steal
-overhead, and needs a different probe (are all cores busy? how often do workers
-steal or hit the global queue?). Levers, in order:
+Measured finding: packing `nums` (16x) and `nodes` (8x) is throughput-neutral —
+the working sets already fit in cache, so arena footprint is NOT the throughput
+bottleneck. These are memory wins (reserve ~800 MB → ~85 MB). The real ceiling is
+parallel scaling.
+
+## parallel scaling (2026-07-02, 24-core box)
+
+`INIO_WORKERS=N` overrides the worker count (defaults to core count). MIps by N,
+median of 3:
+
+| workers | rec.inio | stress.inio |
+| ------- | -------- | ----------- |
+| 1       | 1.19     | 1.16        |
+| 2       | 2.68     | 1.89 (peak) |
+| 4       | 3.00 (peak) | 1.63     |
+| 8       | 2.65     | 1.69        |
+| 16      | 2.60     | 1.59        |
+| 24      | 2.53     | 1.50        |
+
+The runtime peaks at 2-4 workers (~2.5x) then REGRESSES as cores are added —
+using all 24 cores is slower than using 2. This is the goal-1 bottleneck:
+HVM-class runtimes scale near-linearly. Coordination overhead dominates past 4
+cores. Prime suspects, hottest first:
+
+1. The global `outstanding` atomic (`runtime.odin`) — `atomic_add` on every
+   `push_redex` and `atomic_sub` on every completed interaction, one shared line
+   ping-ponging across all workers. Touched ~2x per interaction; the most likely
+   scaling killer. (The interaction counter was already made per-worker for this
+   reason; `outstanding` is hotter and still global.)
+2. The global overflow/fallback queue (`program.redexes`, MPMC) — contention when
+   deques overflow or workers fall back to it.
+3. Deque steal contention + idle backoff spinning.
+
+Next lever: cut coordination contention, starting with termination detection so
+it does not need a single global counter. Levers, in order:
 
 1. Pack the `nums` arena (align 4B) — DONE. Footprint 8.08 MB → 502 KB peak
    (16x). Throughput on rec is unchanged (packed vs padded A/B: median 2.78 vs

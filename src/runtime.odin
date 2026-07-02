@@ -3,6 +3,7 @@ package main
 import "base:runtime"
 import "core:fmt"
 import "core:os"
+import "core:strconv"
 import "core:strings"
 import "core:sync"
 import "core:thread"
@@ -116,6 +117,11 @@ run :: proc(book: ^Book) {
 	seed_redex(&program, Pair{{tag = .REF, data = MAIN}, {tag = .VAR, data = ROOT}})
 
 	num_workers := max(os.get_processor_core_count(), 1)
+	if env := os.get_env("INIO_WORKERS", context.temp_allocator); env != "" {
+		if n, ok := strconv.parse_int(env); ok && n > 0 {
+			num_workers = n
+		}
+	}
 
 	time.stopwatch_start(&ctx.stopwatch)
 
